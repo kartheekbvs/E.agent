@@ -2,11 +2,18 @@
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
+import httpx
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -23,12 +30,74 @@ from web.workspace import (
     resolve_workspace_file,
     read_workspace_file,
 )
+from server.server import PROJECTS
 
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI(title="Entropy")
+
+
+def _rewrite_preview_urls(
+    content: bytes,
+    content_type: str,
+    preview_prefix: str,
+) -> bytes:
+    if not any(
+        content_type.startswith(media_type)
+        for media_type in (
+            "text/html",
+            "text/css",
+            "application/javascript",
+            "text/javascript",
+        )
+    ):
+        return content
+
+    text = content.decode("utf-8", errors="replace")
+
+    if content_type.startswith("text/html"):
+        text = re.sub(
+            r'(\b(?:href|src|action|poster)\s*=\s*["\'])/(?!/)',
+            rf"\1{preview_prefix}/",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"(<script\b[^>]*>)([\s\S]*?)(</script\s*>)",
+            lambda match: (
+                match.group(1)
+                + _rewrite_javascript_urls(match.group(2), preview_prefix)
+                + match.group(3)
+            ),
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    if content_type.startswith("text/css"):
+        text = re.sub(
+            r"url\(\s*/(?!/)",
+            f"url({preview_prefix}/",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    if "javascript" in content_type:
+        text = _rewrite_javascript_urls(text, preview_prefix)
+
+    return text.encode("utf-8")
+
+
+def _rewrite_javascript_urls(text: str, preview_prefix: str) -> str:
+    return re.sub(
+        r"""(["'`])/(?!/)([^"'`\s]*)\1""",
+        lambda match: (
+            f"{match.group(1)}{preview_prefix}/"
+            f"{match.group(2)}{match.group(1)}"
+        ),
+        text,
+    )
 
 # Configure session authentication
 session_secret = os.getenv("SESSION_SECRET")
@@ -149,7 +218,13 @@ async def receive_task(request: TaskRequest):
 
     try:
         agent = MCPToolDiscovery()
-        answer = await agent.run_task(task)
+        answer = await agent.run_task(
+            task,
+            preview_base_url=(
+                os.getenv("RENDER_EXTERNAL_URL")
+                or str(request.base_url)
+            ),
+        )
 
         return {
             "status": "success",
@@ -205,6 +280,10 @@ async def stream_task(request: TaskRequest):
                 answer = await agent.run_task(
                     task,
                     on_progress=on_progress,
+                    preview_base_url=(
+                        os.getenv("RENDER_EXTERNAL_URL")
+                        or str(request.base_url)
+                    ),
                 )
 
                 await queue.put({
@@ -312,6 +391,104 @@ async def login_page():
     )
 
     return FileResponse(auth_file)
+
+
+@app.api_route(
+    "/preview/{project_id}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    dependencies=[Depends(require_login)],
+)
+@app.api_route(
+    "/preview/{project_id}/{preview_path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    dependencies=[Depends(require_login)],
+)
+async def proxy_project_preview(
+    request: Request,
+    project_id: str,
+    preview_path: str = "",
+):
+    project = PROJECTS.get(project_id)
+    if project is None or project["process"].poll() is not None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project preview is not running.",
+        )
+
+    preview_prefix = f"/preview/{project_id}"
+    upstream_path = preview_path.lstrip("/")
+    upstream_url = (
+        f"http://127.0.0.1:{project['port']}/"
+        f"{upstream_path}"
+    )
+    hop_by_hop_headers = {
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+    }
+    request_headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower() not in hop_by_hop_headers
+        and name.lower() != "accept-encoding"
+    }
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            upstream = await client.request(
+                request.method,
+                upstream_url,
+                params=request.query_params,
+                content=await request.body(),
+                headers=request_headers,
+            )
+    except httpx.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach project preview: {error}",
+        ) from error
+
+    content_type = upstream.headers.get("content-type", "")
+    body = _rewrite_preview_urls(
+        upstream.content,
+        content_type,
+        preview_prefix,
+    )
+    response = Response(
+        content=b"" if request.method == "HEAD" else body,
+        status_code=upstream.status_code,
+    )
+
+    excluded_response_headers = hop_by_hop_headers | {
+        "content-encoding",
+        "content-md5",
+        "etag",
+    }
+    for name, value in upstream.headers.multi_items():
+        lower_name = name.lower()
+        if lower_name in excluded_response_headers:
+            continue
+        if lower_name == "location" and value.startswith("/"):
+            value = f"{preview_prefix}{value}"
+        elif lower_name == "set-cookie":
+            value = re.sub(
+                r";\s*Path=/($|;)",
+                rf"; Path={preview_prefix}/\1",
+                value,
+                flags=re.IGNORECASE,
+            )
+        response.raw_headers.append(
+            (lower_name.encode("latin-1"), value.encode("latin-1"))
+        )
+
+    return response
 
 
 @app.get("/health")

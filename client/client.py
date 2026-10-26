@@ -13,7 +13,12 @@ class MCPToolDiscovery:
             args=["run", "mcp", "run", "server/server.py"],
         )
 
-    async def discover(self, task, on_progress=None):
+    async def discover(
+        self,
+        task,
+        on_progress=None,
+        preview_base_url=None,
+    ):
         async with stdio_client(self.server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -82,6 +87,16 @@ class MCPToolDiscovery:
                                     start_project,
                                     **arguments,
                                 )
+
+                                if (
+                                    project_result.get("success")
+                                    and preview_base_url
+                                ):
+                                    project_result["preview_url"] = (
+                                        f"{preview_base_url.rstrip('/')}"
+                                        f"/preview/{project_result['project_id']}/"
+                                    )
+
                                 tool_output = json.dumps(project_result)
                                 tool_error = not project_result.get(
                                     "success",
@@ -187,10 +202,16 @@ class MCPToolDiscovery:
 
         return llm_tools
 
-    async def run_task(self, task, on_progress=None):
+    async def run_task(
+        self,
+        task,
+        on_progress=None,
+        preview_base_url=None,
+    ):
         return await self.discover(
             task,
             on_progress=on_progress,
+            preview_base_url=preview_base_url,
         )
 
 

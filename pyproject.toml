@@ -13,6 +13,7 @@ dependencies = [
      "python-dotenv>=1.2.3",
      "fastapi",
      "itsdangerous>=2.2.0",
+     "httpx>=0.28.1",
 ]
 
 [project.scripts]

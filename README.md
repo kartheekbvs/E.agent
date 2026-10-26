@@ -53,7 +53,9 @@ placeholders only.
    or redeploy.
 5. Deploy, then open the `onrender.com` URL shown by Render.
 
-The generated preview runner currently binds to `127.0.0.1` and chooses a
-separate dynamic port. That is suitable for local development, but the preview
-URL is not publicly reachable from Render. Public previews need a separate
-hosting/proxy setup; deploying the Entropy web app alone does not expose them.
+Generated projects run on an internal loopback port. Entropy serves them through
+an authenticated `/preview/{project_id}/` reverse-proxy route on the same public
+Render URL, so generated apps do not need their own public ports. The proxy
+rewrites root-relative HTML, JavaScript, and CSS URLs to stay under the preview
+path. Run the service as a single instance with one worker because project
+processes are kept in that app process's memory.

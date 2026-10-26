@@ -217,6 +217,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "itsdangerous" },
     { name = "mcp", extra = ["cli"] },
     { name = "openai" },
@@ -226,6 +227,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "mcp", extras = ["cli"], specifier = "<2" },
     { name = "openai", specifier = ">=3.8.0" },
