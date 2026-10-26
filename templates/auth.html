@@ -1,0 +1,256 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entropy — Authentication</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #101114;
+            color: #f5f5f5;
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        .auth-card {
+            width: 100%;
+            max-width: 400px;
+            padding: 32px;
+            background: #1b1c21;
+            border: 1px solid #33343b;
+            border-radius: 16px;
+        }
+
+        .brand {
+            text-align: center;
+            font-size: 30px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #a4a5ae;
+            margin-bottom: 28px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+
+        .tabs button {
+            flex: 1;
+            padding: 11px;
+            border: 1px solid #41424a;
+            border-radius: 8px;
+            background: #25262c;
+            color: #ddd;
+            cursor: pointer;
+        }
+
+        .tabs button.active {
+            background: #e5e7eb;
+            color: #111;
+        }
+
+        label {
+            display: block;
+            margin: 15px 0 7px;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            background: #111216;
+            color: white;
+            border: 1px solid #41424a;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        input:focus {
+            outline: 2px solid #8b8dff;
+            outline-offset: 1px;
+        }
+
+        .submit-button {
+            width: 100%;
+            margin-top: 24px;
+            padding: 13px;
+            border: 0;
+            border-radius: 8px;
+            background: #e5e7eb;
+            color: #111;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        #auth-message {
+            min-height: 20px;
+            margin-top: 16px;
+            font-size: 14px;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+        }
+    </style>
+</head>
+
+<body>
+    <main class="auth-card">
+        <div class="brand">Entropy</div>
+        <div class="subtitle">Your AI coding workspace</div>
+
+        <div class="tabs">
+            <button type="button" id="login-tab" class="active">
+                Login
+            </button>
+            <button type="button" id="signup-tab">
+                Sign up
+            </button>
+        </div>
+
+        <form id="auth-form">
+            <label for="email">Email</label>
+            <input
+                type="email"
+                id="email"
+                autocomplete="email"
+                required
+            >
+
+            <label for="password">Password</label>
+            <input
+                type="password"
+                id="password"
+                autocomplete="current-password"
+                minlength="8"
+                required
+            >
+
+            <div id="confirm-password-section" hidden>
+                <label for="confirm-password">Confirm password</label>
+                <input
+                    type="password"
+                    id="confirm-password"
+                    autocomplete="new-password"
+                    minlength="8"
+                >
+            </div>
+
+            <button
+                type="submit"
+                id="submit-button"
+                class="submit-button"
+            >
+                Login
+            </button>
+
+            <div id="auth-message" role="status" aria-live="polite"></div>
+        </form>
+    </main>
+
+    <script>
+        const form = document.getElementById("auth-form");
+        const loginTab = document.getElementById("login-tab");
+        const signupTab = document.getElementById("signup-tab");
+        const passwordInput = document.getElementById("password");
+        const confirmSection = document.getElementById(
+            "confirm-password-section"
+        );
+        const confirmInput = document.getElementById("confirm-password");
+        const submitButton = document.getElementById("submit-button");
+        const message = document.getElementById("auth-message");
+
+        let mode = "login";
+
+        function setMode(newMode) {
+            mode = newMode;
+
+            const isSignup = mode === "signup";
+
+            loginTab.classList.toggle("active", !isSignup);
+            signupTab.classList.toggle("active", isSignup);
+
+            confirmSection.hidden = !isSignup;
+            confirmInput.required = isSignup;
+
+            passwordInput.autocomplete = isSignup
+                ? "new-password"
+                : "current-password";
+
+            submitButton.textContent = isSignup
+                ? "Create account"
+                : "Login";
+
+            message.textContent = "";
+        }
+
+        loginTab.addEventListener("click", () => setMode("login"));
+        signupTab.addEventListener("click", () => setMode("signup"));
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const email = document.getElementById("email").value.trim();
+            const password = passwordInput.value;
+
+            if (mode === "signup" && password !== confirmInput.value) {
+                message.textContent = "Passwords do not match.";
+                return;
+            }
+
+            submitButton.disabled = true;
+            message.textContent = "Please wait...";
+
+            try {
+                const endpoint = mode === "signup"
+                    ? "/api/auth/signup"
+                    : "/api/auth/login";
+
+                const response = await fetch(endpoint, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "same-origin",
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok || !data.success) {
+                    message.textContent =
+                        data.detail || data.message || "Authentication failed.";
+                    return;
+                }
+
+                message.textContent = data.message;
+                window.location.assign("/");
+            } catch (error) {
+                message.textContent =
+                    "Unable to contact Entropy. Check that the server is running.";
+            } finally {
+                submitButton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

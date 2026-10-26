@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.backup
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local secrets and environment settings
+.env
+.env.*
+!.env.example
+
+# Local user data and generated projects
+data/*.db
+data/*.db-*
+workspace/

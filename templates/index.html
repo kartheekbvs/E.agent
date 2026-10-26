@@ -1,0 +1,967 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Entropy — AI Coding Agent</title>
+
+    <style>
+        :root {
+            color-scheme: dark;
+            --background: #101114;
+            --panel: #191a1f;
+            --panel-light: #202127;
+            --border: #33343d;
+            --text: #f2f2f5;
+            --muted: #a1a1ad;
+            --accent: #c4b5fd;
+            --success: #86efac;
+            --danger: #fca5a5;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: var(--background);
+            color: var(--text);
+            font-family: Inter, Arial, sans-serif;
+        }
+
+        button,
+        textarea {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .topbar {
+            min-height: 66px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 24px;
+            border-bottom: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-icon {
+            width: 38px;
+            height: 38px;
+            display: grid;
+            place-items: center;
+            border-radius: 11px;
+            background: #302750;
+            color: var(--accent);
+            font-weight: bold;
+            font-size: 20px;
+        }
+
+        .brand-name {
+            font-size: 21px;
+            font-weight: 700;
+        }
+
+        .brand-subtitle {
+            margin-top: 3px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .logout-button {
+            padding: 9px 14px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-light);
+            color: var(--text);
+        }
+
+        .logout-button:hover {
+            border-color: var(--accent);
+        }
+
+        .app-layout {
+            display: grid;
+            grid-template-columns: minmax(230px, 30%) minmax(0, 70%);
+            min-height: calc(100vh - 66px);
+        }
+
+        .sidebar {
+            min-width: 0;
+            padding: 20px;
+            border-right: 1px solid var(--border);
+            background: #141519;
+        }
+
+        .section-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .section-heading h2 {
+            margin: 0;
+            font-size: 15px;
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .file-item {
+            width: 100%;
+            padding: 11px;
+            overflow-wrap: anywhere;
+            text-align: left;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            background: transparent;
+            color: #d4d4dc;
+            font-size: 13px;
+        }
+
+        .file-item:hover {
+            background: var(--panel-light);
+        }
+
+        .file-item.active {
+            border-color: #514477;
+            background: #282239;
+            color: var(--accent);
+        }
+
+        .empty-state {
+            padding: 18px 10px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .main-panel {
+            min-width: 0;
+            padding: 24px;
+        }
+
+        .task-panel,
+        .output-panel,
+        .file-viewer {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--panel);
+        }
+
+        .task-panel {
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 22px;
+        }
+
+        .description {
+            margin: 0 0 18px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        #task-input {
+            width: 100%;
+            min-height: 115px;
+            resize: vertical;
+            padding: 14px;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            outline: none;
+            background: #111216;
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        #task-input:focus {
+            border-color: #8270c4;
+        }
+
+        .task-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 14px;
+        }
+
+        .primary-button {
+            padding: 11px 18px;
+            border: 0;
+            border-radius: 8px;
+            background: #d8ccff;
+            color: #181324;
+            font-weight: 700;
+        }
+
+        .primary-button:hover:not(:disabled) {
+            background: #e5ddff;
+        }
+
+        .status {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .output-panel,
+        .file-viewer {
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .panel-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 15px 18px;
+            border-bottom: 1px solid var(--border);
+            background: #1c1d23;
+        }
+
+        .panel-heading h2 {
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .panel-content {
+            padding: 18px;
+        }
+
+        .activity-log {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+
+        .activity-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            color: #d5d5df;
+            font-size: 13px;
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+        }
+
+        .activity-dot {
+            flex-shrink: 0;
+            width: 7px;
+            height: 7px;
+            margin-top: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+        }
+
+        .final-answer {
+            min-height: 55px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            font-size: 14px;
+            line-height: 1.75;
+        }
+
+        #preview-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 14px;
+            padding: 12px 14px;
+            border: 1px solid #315c43;
+            border-radius: 8px;
+            background: #17251d;
+            color: var(--success);
+        }
+
+        #preview-link {
+            color: #c4f5d4;
+            font-weight: 600;
+        }
+
+        .file-content {
+            min-height: 80px;
+            max-height: 520px;
+            overflow: auto;
+            margin: 0;
+            padding: 18px;
+            background: #111216;
+            color: #d8d8e2;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 13px;
+            line-height: 1.7;
+            white-space: pre;
+            tab-size: 4;
+        }
+
+        .success-text {
+            color: var(--success);
+        }
+
+        .error-text {
+            color: var(--danger);
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+
+        @media (max-width: 760px) {
+            .app-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .main-panel {
+                padding: 14px;
+            }
+
+            .topbar {
+                padding: 12px 15px;
+            }
+
+            .task-panel {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-icon">E</div>
+
+            <div>
+                <div class="brand-name">Entropy</div>
+                <div class="brand-subtitle">AI Coding Agent</div>
+            </div>
+        </div>
+
+        <button
+            type="button"
+            id="logout-button"
+            class="logout-button"
+        >
+            Logout
+        </button>
+    </header>
+
+    <div class="app-layout">
+        <aside class="sidebar">
+            <div class="section-heading">
+                <h2>Workspace Files</h2>
+                <span id="file-count" class="muted">0 files</span>
+            </div>
+
+            <div id="file-list" class="file-list">
+                <div class="empty-state">Loading workspace files...</div>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <section class="task-panel">
+                <h1>Build something with Entropy</h1>
+
+                <p class="description">
+                    Describe a coding task. Entropy will use its available
+                    MCP tools to work on your project and report its progress.
+                </p>
+
+                <form id="task-form">
+                    <textarea
+                        id="task-input"
+                        placeholder="Example: Create a Python FastAPI application with a health endpoint..."
+                        required
+                    ></textarea>
+
+                    <div class="task-actions">
+                        <span id="status" class="status">
+                            Ready for your task
+                        </span>
+
+                        <button
+                            type="submit"
+                            id="run-button"
+                            class="primary-button"
+                        >
+                            Run task
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="output-panel">
+                <div class="panel-heading">
+                    <h2>Agent Activity</h2>
+                    <span class="muted">Live progress</span>
+                </div>
+
+                <div class="panel-content">
+                    <div id="activity-log" class="activity-log">
+                        <div class="empty-state">
+                            Your agent's progress will appear here.
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="output-panel">
+                <div class="panel-heading">
+                    <h2>Final Answer</h2>
+                </div>
+
+                <div class="panel-content">
+                    <div id="preview-container" hidden>
+                        <strong>Project is ready!</strong>
+                        <a id="preview-link" href="#" target="_blank" rel="noopener noreferrer">
+                            Open Preview
+                        </a>
+                    </div>
+
+                    <div id="final-answer" class="final-answer">
+                        No task completed yet.
+                    </div>
+                </div>
+            </section>
+
+            <section class="file-viewer">
+                <div class="panel-heading">
+                    <h2 id="file-title">File Viewer</h2>
+                    <span class="muted">Read-only preview</span>
+                </div>
+
+                <pre id="file-contents" class="file-content">Select a file from the workspace explorer to view its contents.</pre>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const taskForm = document.getElementById("task-form");
+        const taskInput = document.getElementById("task-input");
+        const runButton = document.getElementById("run-button");
+        const logoutButton = document.getElementById("logout-button");
+
+        const statusBox = document.getElementById("status");
+        const activityLog = document.getElementById("activity-log");
+        const finalAnswer = document.getElementById("final-answer");
+        const previewContainer = document.getElementById("preview-container");
+        const previewLink = document.getElementById("preview-link");
+        const previewStorageKey = "entropy-preview";
+
+        const fileList = document.getElementById("file-list");
+        const fileCount = document.getElementById("file-count");
+        const fileTitle = document.getElementById("file-title");
+        const fileContents = document.getElementById("file-contents");
+
+        let activeFilePath = null;
+        let taskRunning = false;
+
+        function showPreview(url, port) {
+            const previewUrl = new URL(url, window.location.origin);
+
+            if (!["http:", "https:"].includes(previewUrl.protocol)) {
+                throw new Error("Preview URL must use HTTP or HTTPS.");
+            }
+
+            previewLink.href = previewUrl.href;
+            previewLink.textContent = port
+                ? `Open Preview (${port})`
+                : "Open Preview";
+            previewContainer.hidden = false;
+        }
+
+        function restorePreview() {
+            try {
+                const savedPreview = localStorage.getItem(previewStorageKey);
+
+                if (!savedPreview) {
+                    return;
+                }
+
+                const preview = JSON.parse(savedPreview);
+                showPreview(preview.url, preview.port);
+            } catch (error) {
+                try {
+                    localStorage.removeItem(previewStorageKey);
+                } catch (storageError) {
+                    console.warn("Could not clear the saved preview link.", storageError);
+                }
+                console.warn("Could not restore the saved preview link.", error);
+            }
+        }
+
+        function setStatus(message, isError = false) {
+            statusBox.textContent = message;
+            statusBox.classList.toggle("error-text", isError);
+            statusBox.classList.toggle("success-text", !isError);
+        }
+
+        function addActivity(message, type = "activity") {
+            const emptyState = activityLog.querySelector(".empty-state");
+
+            if (emptyState) {
+                activityLog.replaceChildren();
+            }
+
+            const item = document.createElement("div");
+            item.className = "activity-item";
+
+            const dot = document.createElement("span");
+            dot.className = "activity-dot";
+
+            const text = document.createElement("span");
+            text.textContent = message;
+
+            if (type === "error") {
+                text.classList.add("error-text");
+            } else if (type === "success") {
+                text.classList.add("success-text");
+            }
+
+            item.append(dot, text);
+            activityLog.appendChild(item);
+
+            activityLog.scrollTop = activityLog.scrollHeight;
+        }
+
+        async function handleUnauthorized(response) {
+            if (response.status === 401 || response.status === 403) {
+                window.location.assign("/login");
+                return true;
+            }
+
+            return false;
+        }
+
+        async function loadFiles() {
+            try {
+                const response = await fetch("/api/files", {
+                    credentials: "same-origin"
+                });
+
+                if (await handleUnauthorized(response)) {
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error("Unable to load workspace files.");
+                }
+
+                const data = await response.json();
+                const files = data.files || [];
+
+                fileList.replaceChildren();
+                fileCount.textContent =
+                    `${files.length} file${files.length === 1 ? "" : "s"}`;
+
+                if (files.length === 0) {
+                    const empty = document.createElement("div");
+                    empty.className = "empty-state";
+                    empty.textContent = "Workspace is empty.";
+                    fileList.appendChild(empty);
+
+                    activeFilePath = null;
+                    fileTitle.textContent = "File Viewer";
+                    fileContents.textContent =
+                        "Create a file with Entropy, or select a file to preview it.";
+
+                    return;
+                }
+
+                for (const file of files) {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "file-item";
+                    button.textContent = `📄 ${file.path}`;
+                    button.title = file.path;
+
+                    if (file.path === activeFilePath) {
+                        button.classList.add("active");
+                    }
+
+                    button.addEventListener("click", () => {
+                        openFile(file.path);
+                    });
+
+                    fileList.appendChild(button);
+                }
+
+                if (
+                    activeFilePath &&
+                    files.some(file => file.path === activeFilePath)
+                ) {
+                    await openFile(activeFilePath);
+                } else if (!activeFilePath) {
+                    fileTitle.textContent = "File Viewer";
+                    fileContents.textContent =
+                        "Select a file from the workspace explorer to view its contents.";
+                }
+            } catch (error) {
+                fileList.replaceChildren();
+
+                const message = document.createElement("div");
+                message.className = "empty-state error-text";
+                message.textContent = error.message;
+
+                fileList.appendChild(message);
+            }
+        }
+
+        async function openFile(path) {
+            activeFilePath = path;
+            fileTitle.textContent = path;
+            fileContents.textContent = "Loading file...";
+
+            try {
+                const response = await fetch(
+                    `/api/file?path=${encodeURIComponent(path)}`,
+                    { credentials: "same-origin" }
+                );
+
+                if (await handleUnauthorized(response)) {
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || "Unable to open file.");
+                }
+
+                fileContents.textContent = data.content;
+
+                document.querySelectorAll(".file-item").forEach(button => {
+                    button.classList.toggle(
+                        "active",
+                        button.title === path
+                    );
+                });
+            } catch (error) {
+                fileContents.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function clearWorkspace() {
+            const response = await fetch("/api/workspace/clear", {
+                method: "POST",
+                credentials: "same-origin"
+            });
+
+            if (await handleUnauthorized(response)) {
+                throw new Error("Your session has expired. Please log in.");
+            }
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(
+                    data.detail || "Unable to clear the workspace."
+                );
+            }
+
+            activeFilePath = null;
+            await loadFiles();
+        }
+
+        function parseSSEEvent(eventText) {
+            let eventName = "message";
+            const dataLines = [];
+
+            for (const line of eventText.split(/\r?\n/)) {
+                if (line.startsWith("event:")) {
+                    eventName = line.slice(6).trim();
+                } else if (line.startsWith("data:")) {
+                    dataLines.push(line.slice(5).trimStart());
+                }
+            }
+
+            if (dataLines.length === 0) {
+                return null;
+            }
+
+            const rawData = dataLines.join("\n");
+
+            try {
+                return {
+                    event: eventName,
+                    data: JSON.parse(rawData)
+                };
+            } catch {
+                return {
+                    event: eventName,
+                    data: rawData
+                };
+            }
+        }
+
+        async function handleEvent(eventText) {
+            const parsed = parseSSEEvent(eventText);
+
+            if (!parsed) {
+                return;
+            }
+
+            const eventType = parsed.event;
+            const data = parsed.data;
+
+            if (
+                eventType === "preview" ||
+                (data && typeof data === "object" && data.type === "preview")
+            ) {
+                if (data && typeof data === "object" && data.url) {
+                    try {
+                        showPreview(data.url, data.port);
+                        localStorage.setItem(
+                            previewStorageKey,
+                            JSON.stringify({
+                                url: previewLink.href,
+                                port: data.port
+                            })
+                        );
+                    } catch (error) {
+                        addActivity(
+                            `Could not save the preview link: ${error.message}`,
+                            "error"
+                        );
+                    }
+                }
+
+                return;
+            }
+
+            if (eventType === "activity") {
+                const message =
+                    typeof data === "string"
+                        ? data
+                        : data.message || data.activity || JSON.stringify(data);
+
+                addActivity(message);
+                setStatus(message);
+            } else if (eventType === "result") {
+                const answer =
+                    typeof data === "string"
+                        ? data
+                        : data.answer || data.result || data.message || "";
+
+                finalAnswer.textContent = answer;
+                addActivity("Task completed.", "success");
+                setStatus("Task completed.");
+
+                await loadFiles();
+            } else if (eventType === "error") {
+                const message =
+                    typeof data === "string"
+                        ? data
+                        : data.message || data.detail || JSON.stringify(data);
+
+                addActivity(message, "error");
+                finalAnswer.textContent = message;
+                setStatus("Task failed.", true);
+            } else if (eventType === "message") {
+                const message =
+                    typeof data === "string"
+                        ? data
+                        : data.message || JSON.stringify(data);
+
+                addActivity(message);
+            }
+        }
+
+        taskForm.addEventListener("submit", async event => {
+            event.preventDefault();
+
+            if (taskRunning) {
+                return;
+            }
+
+            const task = taskInput.value.trim();
+
+            if (!task) {
+                setStatus("Please enter a task first.", true);
+                return;
+            }
+
+            const confirmed = window.confirm(
+                "Starting a new task will delete all files from your previous workspace. Do you want to continue?"
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            taskRunning = true;
+            runButton.disabled = true;
+            taskInput.disabled = true;
+
+            activityLog.replaceChildren();
+            finalAnswer.textContent = "Working on your task...";
+            previewContainer.hidden = true;
+            setStatus("Preparing workspace...");
+
+            try {
+                try {
+                    localStorage.removeItem(previewStorageKey);
+                } catch (error) {
+                    addActivity(
+                        `Could not clear the previous preview link: ${error.message}`,
+                        "error"
+                    );
+                }
+
+                await clearWorkspace();
+
+                addActivity("Workspace cleared for the new task.");
+                setStatus("Connecting to Entropy agent...");
+
+                const response = await fetch("/task/stream", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "same-origin",
+                    body: JSON.stringify({ task })
+                });
+
+                if (await handleUnauthorized(response)) {
+                    return;
+                }
+
+                if (!response.ok) {
+                    let message = `Task request failed (${response.status}).`;
+
+                    try {
+                        const errorData = await response.json();
+                        message = errorData.detail || message;
+                    } catch {
+                        // Keep the default error message.
+                    }
+
+                    throw new Error(message);
+                }
+
+                if (!response.body) {
+                    throw new Error("The server did not provide a response stream.");
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                let buffer = "";
+
+                while (true) {
+                    const { value, done } = await reader.read();
+
+                    if (done) {
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    const events = buffer.split(/\r?\n\r?\n/);
+                    buffer = events.pop() || "";
+
+                    for (const eventText of events) {
+                        await handleEvent(eventText);
+                    }
+                }
+
+                buffer += decoder.decode();
+
+                if (buffer.trim()) {
+                    await handleEvent(buffer);
+                }
+
+                setStatus("Agent stream ended.");
+                await loadFiles();
+            } catch (error) {
+                addActivity(error.message, "error");
+                finalAnswer.textContent = error.message;
+                setStatus("Something went wrong.", true);
+            } finally {
+                taskRunning = false;
+                runButton.disabled = false;
+                taskInput.disabled = false;
+
+                await loadFiles();
+            }
+        });
+
+        logoutButton.addEventListener("click", async () => {
+            if (taskRunning) {
+                window.alert(
+                    "Please wait for the current task to finish before logging out."
+                );
+                return;
+            }
+
+            logoutButton.disabled = true;
+
+            try {
+                const response = await fetch("/api/auth/logout", {
+                    method: "POST",
+                    credentials: "same-origin"
+                });
+
+                if (!response.ok) {
+                    throw new Error("Logout failed. Please try again.");
+                }
+
+                window.location.assign("/login");
+            } catch (error) {
+                window.alert(error.message);
+                logoutButton.disabled = false;
+            }
+        });
+
+
+
+        // Load the current workspace when the page opens.
+        restorePreview();
+        loadFiles();
+    </script>
+</body>
+</html>

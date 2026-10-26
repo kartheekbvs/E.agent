@@ -1,0 +1,24 @@
+[project]
+name = "entropy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "kartheekbvs", email = "bvskartheek83@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+     "mcp[cli]<2",
+     "openai>=3.8.0",
+     "python-dotenv>=1.2.3",
+     "fastapi",
+     "itsdangerous>=2.2.0",
+]
+
+[project.scripts]
+entropy = "entropy:main"
+
+[build-system]
+requires = ["uv_build>=0.12.12,<0.13.0"]
+build-backend = "uv_build"
+# Cache invalidation test
