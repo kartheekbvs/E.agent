@@ -117,8 +117,11 @@ app.add_middleware(
 
 
 # Request models
+
 class TaskRequest(BaseModel):
     task: str
+    effort: str = "medium"
+    coding_level: str = "college"
 
 
 class AuthRequest(BaseModel):
@@ -207,10 +210,13 @@ async def get_current_user(request: Request):
     "/task",
     dependencies=[Depends(require_login)],
 )
-async def receive_task(request: TaskRequest):
-    task = request.task.strip()
+async def receive_task(
+    http_request: Request,
+    task_request: TaskRequest,
+):
+    task = task_request.task
 
-    if not task:
+    if not task.strip():
         return {
             "status": "error",
             "message": "Task cannot be empty.",
@@ -222,7 +228,7 @@ async def receive_task(request: TaskRequest):
             task,
             preview_base_url=(
                 os.getenv("RENDER_EXTERNAL_URL")
-                or str(request.base_url)
+                or str(http_request.base_url)
             ),
         )
 
@@ -243,12 +249,15 @@ async def receive_task(request: TaskRequest):
     "/task/stream",
     dependencies=[Depends(require_login)],
 )
-async def stream_task(request: TaskRequest):
-    task = request.task.strip()
+async def stream_task(
+    http_request: Request,
+    task_request: TaskRequest,
+):
+    task = task_request.task
 
     async def event_stream():
         # Reject empty tasks before starting the agent.
-        if not task:
+        if not task.strip():
             event = {
                 "type": "error",
                 "message": "Task cannot be empty.",
@@ -282,8 +291,10 @@ async def stream_task(request: TaskRequest):
                     on_progress=on_progress,
                     preview_base_url=(
                         os.getenv("RENDER_EXTERNAL_URL")
-                        or str(request.base_url)
+                        or str(http_request.base_url)
                     ),
+                     effort=task_request.effort,
+    coding_level=task_request.coding_level,
                 )
 
                 await queue.put({

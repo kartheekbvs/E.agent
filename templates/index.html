@@ -299,6 +299,23 @@
             line-height: 1.75;
         }
 
+        .final-answer.is-writing::after {
+            content: "";
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            background: currentColor;
+            animation: answer-cursor 0.8s steps(2, start) infinite;
+        }
+
+        @keyframes answer-cursor {
+            to {
+                visibility: hidden;
+            }
+        }
+
         #preview-container {
             display: flex;
             align-items: center;
@@ -367,6 +384,69 @@
                 padding: 15px;
             }
         }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+            margin-top: 18px;
+        }
+
+        .setting-card {
+            padding: 15px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #141519;
+        }
+
+        .setting-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .setting-heading label {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .setting-value {
+            color: var(--accent);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .setting-description {
+            min-height: 36px;
+            margin: 0 0 12px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .setting-slider {
+            width: 100%;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .setting-labels {
+            display: flex;
+            justify-content: space-between;
+            gap: 6px;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        @media (max-width: 600px) {
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
     </style>
 </head>
 
@@ -417,6 +497,72 @@
                         placeholder="Example: Create a Python FastAPI application with a health endpoint..."
                         required
                     ></textarea>
+
+                    <div class="settings-grid">
+                        <div class="setting-card">
+                            <div class="setting-heading">
+                                <label for="effort-input">Effort</label>
+                                <span id="effort-value" class="setting-value">
+                                    Medium
+                                </span>
+                            </div>
+
+                            <p class="setting-description">
+                                Choose how much planning, iteration and
+                                verification Entropy should invest.
+                            </p>
+
+                            <input
+                                type="range"
+                                id="effort-input"
+                                class="setting-slider"
+                                min="0"
+                                max="2"
+                                step="1"
+                                value="1"
+                            >
+
+                            <div class="setting-labels">
+                                <span>Low</span>
+                                <span>Medium</span>
+                                <span>Max</span>
+                            </div>
+                        </div>
+
+                        <div class="setting-card">
+                            <div class="setting-heading">
+                                <label for="coding-level-input">
+                                    Coding level
+                                </label>
+                                <span id="coding-level-value"
+                                      class="setting-value">
+                                    College
+                                </span>
+                            </div>
+
+                            <p class="setting-description">
+                                Choose the expected solution complexity
+                                and engineering depth.
+                            </p>
+
+                            <input
+                                type="range"
+                                id="coding-level-input"
+                                class="setting-slider"
+                                min="0"
+                                max="3"
+                                step="1"
+                                value="2"
+                            >
+
+                            <div class="setting-labels">
+                                <span>Basic</span>
+                                <span>Medium</span>
+                                <span>College</span>
+                                <span>Advanced</span>
+                            </div>
+                        </div>
+                    </div>
 
                     <div class="task-actions">
                         <span id="status" class="status">
@@ -496,6 +642,32 @@
         const fileCount = document.getElementById("file-count");
         const fileTitle = document.getElementById("file-title");
         const fileContents = document.getElementById("file-contents");
+
+        const effortInput = document.getElementById("effort-input");
+        const effortValue = document.getElementById("effort-value");
+
+        const codingLevelInput =
+            document.getElementById("coding-level-input");
+        const codingLevelValue =
+            document.getElementById("coding-level-value");
+
+        const effortLabels = ["Low", "Medium", "Max"];
+        const codingLevelLabels = [
+            "Basic",
+            "Medium",
+            "College",
+            "Advanced"
+        ];
+
+        effortInput.addEventListener("input", () => {
+            effortValue.textContent =
+                effortLabels[Number(effortInput.value)];
+        });
+
+        codingLevelInput.addEventListener("input", () => {
+            codingLevelValue.textContent =
+                codingLevelLabels[Number(codingLevelInput.value)];
+        });
 
         let activeFilePath = null;
         let taskRunning = false;
@@ -738,6 +910,25 @@
             }
         }
 
+        async function writeFinalAnswer(answer) {
+            finalAnswer.textContent = "";
+            finalAnswer.classList.add("is-writing");
+
+            try {
+                const parts = answer.match(/\s+|[^\s]+/g) || [];
+
+                for (const part of parts) {
+                    finalAnswer.textContent += part;
+
+                    if (!/^\s+$/.test(part)) {
+                        await new Promise(resolve => setTimeout(resolve, 28));
+                    }
+                }
+            } finally {
+                finalAnswer.classList.remove("is-writing");
+            }
+        }
+
         async function handleEvent(eventText) {
             const parsed = parseSSEEvent(eventText);
 
@@ -745,8 +936,13 @@
                 return;
             }
 
-            const eventType = parsed.event;
             const data = parsed.data;
+            const eventType =
+                parsed.event !== "message"
+                    ? parsed.event
+                    : data && typeof data === "object" && data.type
+                        ? data.type
+                        : "message";
 
             if (
                 eventType === "preview" ||
@@ -787,7 +983,7 @@
                         ? data
                         : data.answer || data.result || data.message || "";
 
-                finalAnswer.textContent = answer;
+                await writeFinalAnswer(answer);
                 addActivity("Task completed.", "success");
                 setStatus("Task completed.");
 
@@ -818,9 +1014,9 @@
                 return;
             }
 
-            const task = taskInput.value.trim();
+            const task = taskInput.value;
 
-            if (!task) {
+            if (!task.trim()) {
                 setStatus("Please enter a task first.", true);
                 return;
             }
@@ -863,7 +1059,15 @@
                         "Content-Type": "application/json"
                     },
                     credentials: "same-origin",
-                    body: JSON.stringify({ task })
+                    body: JSON.stringify({
+                        task,
+                        effort: effortLabels[
+                            Number(effortInput.value)
+                        ].toLowerCase(),
+                        coding_level: codingLevelLabels[
+                            Number(codingLevelInput.value)
+                        ].toLowerCase()
+                    })
                 });
 
                 if (await handleUnauthorized(response)) {

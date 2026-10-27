@@ -14,10 +14,12 @@ class MCPToolDiscovery:
         )
 
     async def discover(
-        self,
-        task,
-        on_progress=None,
-        preview_base_url=None,
+         self,
+    task,
+    on_progress=None,
+    preview_base_url=None,
+    effort="medium",
+    coding_level="college",
     ):
         async with stdio_client(self.server_params) as (read, write):
             async with ClientSession(read, write) as session:
@@ -26,7 +28,53 @@ class MCPToolDiscovery:
                 discovered = await session.list_tools()
                 llm_tools = self.to_llm_tools(discovered.tools)
 
+                system_prompt = f"""
+You are Entropy, an autonomous MCP-powered coding agent.
+
+USER CONFIGURATION
+- Effort: {effort}
+- Coding level: {coding_level}
+
+EFFORT GUIDANCE
+- low: Prefer direct, efficient execution for straightforward tasks.
+  Avoid unnecessary planning and exploration.
+- medium: Balance planning, implementation, debugging, and verification.
+- max: Invest more effort in understanding requirements, exploring
+  alternatives, planning complex work, testing, and iterative improvement.
+
+CODING LEVEL GUIDANCE
+- basic: Prefer simple, readable, beginner-friendly implementations.
+- medium: Use appropriate modularity, validation, and error handling.
+- college: Use suitable academic structure, algorithms, explanations,
+  and testing when relevant to the task.
+- advanced: Consider architecture, maintainability, security, testing,
+  and production engineering practices when appropriate.
+
+AGENT BEHAVIOR
+- Understand the user's actual request before choosing an approach.
+- Decide whether planning is useful for the task. Do not create a plan
+  for every request.
+- For complex or multi-step tasks, use the available planner tools to
+  create actionable tasks and dependencies when useful.
+- Discover and use available MCP tools dynamically. Never invent tools.
+- Use actual tool results to decide what to do next.
+- Adapt your strategy when an approach fails.
+- Verify important outcomes using available evidence.
+- Do not claim that code was tested or work was completed unless the
+  available results support that claim.
+- Continue while useful work remains and execution is safe.
+- Respect cancellation, approval requirements, and runtime resource
+  limits. Do not stop merely because a predetermined number of turns
+  has elapsed.
+- Return a concise, accurate final response when the task is finished
+  or explain clearly what prevents completion.
+"""
+
                 messages = [
+                        {
+        "role": "system",
+        "content": system_prompt,
+    },
                     {
                         "role": "user",
                         "content": task,
@@ -72,10 +120,12 @@ class MCPToolDiscovery:
                         except (json.JSONDecodeError, TypeError):
                             arguments = {}
 
+                        call_summary = f"Executing tool: {tool_name}"
+                        if arguments.get("path"):
+                            call_summary += f" (path: {arguments['path']})"
+
                         if on_progress:
-                            on_progress(
-                                f"Executing tool: {tool_name}"
-                            )
+                            on_progress(call_summary)
 
                         try:
                             project_result = None
@@ -161,9 +211,12 @@ class MCPToolDiscovery:
                         )
 
                         if on_progress:
-                            on_progress(
-                                f"Tool completed: {tool_name}"
+                            completed_message = call_summary.replace(
+                                "Executing tool:",
+                                "Tool completed:",
+                                1,
                             )
+                            on_progress(completed_message)
 
                     response = llm.generate(
                         messages,
@@ -204,26 +257,30 @@ class MCPToolDiscovery:
 
     async def run_task(
         self,
-        task,
-        on_progress=None,
-        preview_base_url=None,
+    task,
+    on_progress=None,
+    preview_base_url=None,
+    effort="medium",
+    coding_level="college",
     ):
         return await self.discover(
             task,
-            on_progress=on_progress,
-            preview_base_url=preview_base_url,
+        on_progress=on_progress,
+        preview_base_url=preview_base_url,
+        effort=effort,
+        coding_level=coding_level,
         )
 
 
 async def main():
     discovery = MCPToolDiscovery()
 
-    task = (
-        "Read model/llm.py and explain how Entropy calls the LLM. "
-        "Do not use run_command; only read and explain the file."
-    )
+    task = input("Enter a task for Entropy: ")
 
-    answer = await discovery.discover(task)
+    if not task.strip():
+        raise ValueError("Task cannot be empty.")
+
+    answer = await discovery.run_task(task)
     print(answer)
 
 

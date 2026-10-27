@@ -9,10 +9,136 @@ import tempfile
 import uuid
 import os
 import re
-mcp = FastMCP("ENTROPY MCP")
+import sys
 
-WORKSPACE = Path(__file__).resolve().parent.parent/"workspace"
+from typing import Literal
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from planner.planner import Planner
+mcp = FastMCP("ENTROPY MCP")
+planner = Planner()
+WORKSPACE = ROOT_DIR / "workspace"
 WORKSPACE.mkdir(parents = True,exist_ok = True)
+
+
+@mcp.tool()
+def create_plan(goal: str) -> dict:
+    """Create a plan for a coding or research goal."""
+    plan = planner.create_plan(goal)
+    return planner.plan_to_dict(plan.plan_id)
+
+@mcp.tool()
+def add_task(
+    plan_id: str,
+    description: str,
+    dependencies: list[str] | None = None,
+) -> dict:
+    """Add a task to a plan, optionally depending on existing tasks."""
+    task = planner.add_task(
+        plan_id=plan_id,
+        description=description,
+        dependencies=dependencies,
+    )
+
+    return planner.task_to_dict(task)
+
+@mcp.tool()
+def get_plan(plan_id: str) -> dict:
+    """Get a plan and all its tasks with their current statuses."""
+    return planner.plan_to_dict(plan_id)
+
+@mcp.tool()
+def get_next_task(plan_id: str) -> dict:
+    """Get the next pending task whose dependencies are completed."""
+    task = planner.get_next_task(plan_id)
+
+    if task is None:
+        return {
+            "task": None,
+            "message": "No task is currently ready to execute.",
+        }
+
+    return {
+        "task": planner.task_to_dict(task),
+        "message": "Next executable task found.",
+    }
+
+    def update_task(
+        self,
+        plan_id: str,
+        task_id: str,
+        status: TaskStatus,
+        result: str | None = None,
+    ) -> Task:
+        plan = self.get_plan(plan_id)
+
+        if plan.status != "active":
+            raise ValueError("Cannot update a task in an inactive plan.")
+
+        task = next(
+            (item for item in plan.tasks if item.task_id == task_id),
+            None,
+        )
+
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+
+        allowed_statuses = {
+            "pending",
+            "in_progress",
+            "completed",
+            "failed",
+            "blocked",
+        }
+        if status not in allowed_statuses:
+            raise ValueError(f"Invalid task status: {status}")
+
+        if status == "in_progress":
+            if task.status != "pending":
+                raise ValueError("Only pending tasks can be started.")
+
+            for dependency_id in task.dependencies:
+                dependency = next(
+                    item for item in plan.tasks
+                    if item.task_id == dependency_id
+                )
+                if dependency.status != "completed":
+                    raise ValueError(
+                        f"Dependency is not complete: {dependency_id}"
+                    )
+
+        elif status == "completed":
+            if task.status != "in_progress":
+                raise ValueError(
+                    "Only in-progress tasks can be completed."
+                )
+
+            if result is None or not result.strip():
+                raise ValueError(
+                    "A non-empty result is required to complete a task."
+                )
+
+        elif status in {"failed", "blocked"}:
+            if task.status != "in_progress":
+                raise ValueError(
+                    "Only in-progress tasks can be failed or blocked."
+                )
+
+        elif status == "pending":
+            raise ValueError(
+                "Tasks cannot be reset to pending through update_task."
+            )
+
+        task.status = status
+
+        if result is not None:
+            task.result = result.strip()
+
+        self._refresh_plan_status(plan)
+        return task
 
 
 def resolve_path(path: str) -> Path:

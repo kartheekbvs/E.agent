@@ -19,10 +19,15 @@ Requirements: Python 3.13 and [uv](https://docs.astral.sh/uv/).
 3. Start the app:
 
    ```powershell
-   uv run uvicorn web.app:app --reload --host 127.0.0.1 --port 8000
+   uv run uvicorn web.app:app --host 127.0.0.1 --port 8000
    ```
 
 4. Open <http://127.0.0.1:8000>.
+
+Do not use Uvicorn's `--reload` while running generated tasks. Its file watcher
+can restart Entropy when files are written to `workspace/`, which clears the
+in-memory registry for running previews. Preview links remain available only
+while the Entropy process that started them is running.
 
 Never commit `.env`; it contains private credentials. `.env.example` contains
 placeholders only.
