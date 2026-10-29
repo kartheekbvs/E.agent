@@ -203,6 +203,20 @@ def wait_for_server(
     return False
 
 
+def get_public_preview_base_url() -> str:
+    for env_name in (
+        "PUBLIC_BASE_URL",
+        "APP_PUBLIC_URL",
+        "RENDER_EXTERNAL_URL",
+        "RENDER_URL",
+    ):
+        value = os.getenv(env_name)
+        if value:
+            return value.rstrip("/")
+
+    return "http://127.0.0.1"
+
+
 def choose_port(requested_port: int) -> int:
     import socket
 
@@ -519,13 +533,20 @@ def start_project(
                 ),
             }
 
+        public_base = get_public_preview_base_url()
+        preview_url = (
+            f"{public_base}/preview/{project_id}/"
+            if public_base != "http://127.0.0.1"
+            else f"http://127.0.0.1:{port}/"
+        )
+
         return {
             "success": True,
             "project_id": project_id,
             "pid": process.pid,
             "project_type": project_type,
             "port": port,
-            "preview_url": f"http://127.0.0.1:{port}/",
+            "preview_url": preview_url,
             "message": "Project server is accepting connections.",
         }
 
@@ -554,13 +575,20 @@ def get_project_status(project_id: str) -> dict[str, str | int | bool]:
     returncode = process.poll()
 
     if returncode is None:
+        public_base = get_public_preview_base_url()
+        preview_url = (
+            f"{public_base}/preview/{project_id}/"
+            if public_base != "http://127.0.0.1"
+            else f"http://127.0.0.1:{project['port']}/"
+        )
+
         return {
             "success": True,
             "running": True,
             "project_id": project_id,
             "pid": process.pid,
             "port": project["port"],
-            "preview_url": f"http://127.0.0.1:{project['port']}/",
+            "preview_url": preview_url,
         }
 
     log_path = project.get("log_path", "")

@@ -626,12 +626,23 @@ async def receive_task(
         else:
             agent = MCPToolDiscovery()
 
+        forwarded_proto = http_request.headers.get("x-forwarded-proto")
+        forwarded_host = http_request.headers.get("x-forwarded-host")
+        forwarded_host = forwarded_host or http_request.headers.get("host")
+        public_base_url = (
+            os.getenv("PUBLIC_BASE_URL")
+            or os.getenv("APP_PUBLIC_URL")
+            or os.getenv("RENDER_EXTERNAL_URL")
+            or (
+                f"{forwarded_proto}://{forwarded_host}"
+                if forwarded_proto and forwarded_host
+                else str(http_request.base_url).rstrip("/")
+            )
+        )
+
         answer = await agent.run_task(
             task,
-            preview_base_url=(
-                os.getenv("RENDER_EXTERNAL_URL")
-                or str(http_request.base_url)
-            ),
+            preview_base_url=public_base_url,
             effort=task_request.effort,
             coding_level=task_request.coding_level,
         )
@@ -734,13 +745,24 @@ async def stream_task(
                         f"{agent_task}\n\nProject memory summary:\n{memory_summary}"
                     )
 
+                forwarded_proto = http_request.headers.get("x-forwarded-proto")
+                forwarded_host = http_request.headers.get("x-forwarded-host")
+                forwarded_host = forwarded_host or http_request.headers.get("host")
+                public_base_url = (
+                    os.getenv("PUBLIC_BASE_URL")
+                    or os.getenv("APP_PUBLIC_URL")
+                    or os.getenv("RENDER_EXTERNAL_URL")
+                    or (
+                        f"{forwarded_proto}://{forwarded_host}"
+                        if forwarded_proto and forwarded_host
+                        else str(http_request.base_url).rstrip("/")
+                    )
+                )
+
                 answer = await agent.run_task(
                     agent_task,
                     on_progress=on_progress,
-                    preview_base_url=(
-                        os.getenv("RENDER_EXTERNAL_URL")
-                        or str(http_request.base_url)
-                    ),
+                    preview_base_url=public_base_url,
                     effort=task_request.effort,
                     coding_level=task_request.coding_level,
                 )

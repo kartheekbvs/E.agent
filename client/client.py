@@ -196,16 +196,27 @@ After completing the user's task:
                                 and project_result.get("success")
                                 and project_result.get("preview_url")
                             ):
+                                preview_url = project_result["preview_url"]
+                                project_key = project_result.get("project_id") or self.project_id
+                                if (
+                                    preview_base_url
+                                    and (
+                                        "127.0.0.1" in preview_url
+                                        or "localhost" in preview_url
+                                    )
+                                    and project_key
+                                ):
+                                    preview_url = (
+                                        f"{preview_base_url.rstrip('/')}/preview/"
+                                        f"{project_key}/"
+                                    )
+
                                 preview = {
-                                    "url": project_result["preview_url"],
-                                    "project_id": project_result.get(
-                                        "project_id"
-                                    ),
+                                    "url": preview_url,
+                                    "project_id": project_key,
                                     "port": project_result.get("port"),
                                 }
-
                                 preview_urls.append(preview)
-
                                 if on_progress:
                                     on_progress(
                                         {
