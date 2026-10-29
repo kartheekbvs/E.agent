@@ -10,19 +10,28 @@ import uuid
 import os
 import re
 import sys
+import asyncio
 
 from typing import Literal
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+from pathlib import Path
+import sys
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from model.multi_agent import MultiAgent
 from planner.planner import Planner
 mcp = FastMCP("ENTROPY MCP")
 planner = Planner()
 WORKSPACE = ROOT_DIR / "workspace"
 WORKSPACE.mkdir(parents = True,exist_ok = True)
-
+child_agent = MultiAgent()
 
 @mcp.tool()
 def create_plan(goal: str) -> dict:
@@ -142,10 +151,31 @@ def get_next_task(plan_id: str) -> dict:
 
 
 def resolve_path(path: str) -> Path:
-    requested_path = (WORKSPACE / path).resolve()
-    if not requested_path.is_relative_to(WORKSPACE):
-        raise ValueError("Path is outside the workspace")
-    return requested_path
+    if not path:
+        raise ValueError("Path cannot be empty")
+
+    if WORKSPACE.is_symlink():
+        raise ValueError("Workspace cannot be a symbolic link")
+
+    root = WORKSPACE.resolve()
+    requested_path = Path(path)
+
+    if requested_path.is_absolute() or ".." in requested_path.parts:
+        raise ValueError("Invalid workspace path")
+
+    current_path = WORKSPACE
+    for part in requested_path.parts:
+        current_path = current_path / part
+        if current_path.is_symlink():
+            raise ValueError("Symbolic links are not allowed")
+
+    resolved_path = (WORKSPACE / requested_path).resolve()
+    try:
+        resolved_path.relative_to(root)
+    except ValueError as error:
+        raise ValueError("Path is outside the workspace") from error
+
+    return resolved_path
 
 PROJECTS = {}
 
@@ -651,6 +681,70 @@ def write_file(path: str, content: str) -> str:
 
 
 @mcp.tool()
-def multi_agent():
-    """Report that the multi-agent tool is not implemented yet."""
-    return "multi_agent is not implemented yet."
+async def multi_agent(
+    task: str,
+    context: dict | None = None,
+    effort: str = "medium",
+    coding_level: str = "college",
+) -> dict:
+    """Delegate a specific task to Entropy's separate child LLM.
+
+    Supply the task, relevant context, effort, and coding level.
+    The child uses its own MCP server and restricted toolset,
+    then returns its result to the main agent.
+    """
+
+    if not task.strip():
+        return {
+            "success": False,
+            "error": "Task cannot be empty.",
+        }
+
+    if effort not in {"low", "medium", "max"}:
+        return {
+            "success": False,
+            "error": "effort must be low, medium, or max.",
+        }
+
+    if coding_level not in {
+        "basic", "medium", "college", "advanced"
+    }:
+        return {
+            "success": False,
+            "error": (
+                "coding_level must be basic, medium, "
+                "college, or advanced."
+            ),
+        }
+
+    try:
+        result = await child_agent.run_task(
+            task=task,
+            context=context or {},
+            effort=effort,
+            coding_level=coding_level,
+        )
+
+        return {
+            "success": True,
+            "task": task,
+            "result": result,
+        }
+
+    except Exception as error:
+        import traceback
+
+        return {
+        "success": False,
+        "error": "".join(
+            traceback.format_exception(error)
+        ),
+        "exception_type": type(error).__name__,
+        "details": [
+            {
+                "type": type(inner).__name__,
+                "message": str(inner),
+            }
+            for inner in getattr(error, "exceptions", [])
+        ],
+    }

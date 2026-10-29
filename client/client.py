@@ -1,17 +1,41 @@
 
 import asyncio
 import json
+import os
 
 from mcp.client.stdio import stdio_client
 from mcp import ClientSession, StdioServerParameters
 
 
 class MCPToolDiscovery:
-    def __init__(self):
-        self.server_params = StdioServerParameters(
-            command="uv",
-            args=["run", "mcp", "run", "server/server.py"],
-        )
+    def __init__(
+        self,
+        project_id: str | None = None,
+        owner_id: str | int | None = None,
+        workspace_path: str | None = None,
+    ):
+        self.project_id = project_id
+        self.owner_id = str(owner_id) if owner_id is not None else None
+        self.workspace_path = workspace_path
+
+        env = os.environ.copy()
+
+        if project_id and owner_id and workspace_path:
+            env["ENTROPY_PROJECT_ID"] = project_id
+            env["ENTROPY_OWNER_ID"] = str(owner_id)
+            env["ENTROPY_WORKSPACE"] = workspace_path
+
+            self.server_params = StdioServerParameters(
+                command="uv",
+                args=["run", "python", "-m", "server.project_server"],
+                env=env,
+            )
+        else:
+            self.server_params = StdioServerParameters(
+                command="uv",
+                args=["run", "mcp", "run", "server/server.py"],
+                env=env,
+            )
 
     async def discover(
          self,
@@ -68,6 +92,25 @@ AGENT BEHAVIOR
   has elapsed.
 - Return a concise, accurate final response when the task is finished
   or explain clearly what prevents completion.
+"""
+
+                if self.project_id and self.workspace_path:
+                    system_prompt += """PROJECT MEMORY — memory.entropy
+You are working inside an isolated Entropy project workspace.
+Before making changes:
+- If memory.entropy exists, use it as a concise project summary.
+- Inspect the actual project files before relying on remembered details.
+- Treat the summary as potentially outdated; actual files and the user's current request take priority.
+After completing the user's task:
+- Use the available MCP file tools to create or update memory.entropy.
+- Keep the summary concise and useful for future sessions.
+- Record the project's purpose, architecture, important file paths, completed work, relevant design decisions, known issues, and next steps.
+- Update existing information instead of blindly appending duplicates.
+- Record only facts supported by the files, tool results, or user requests.
+- Never store API keys, passwords, tokens, or other secrets.
+- Never store hidden chain-of-thought or private internal reasoning.
+- If verification failed, clearly record what remains unverified.
+- Do not claim a memory update succeeded unless the tool confirms it.
 """
 
                 messages = [
@@ -130,40 +173,22 @@ AGENT BEHAVIOR
                         try:
                             project_result = None
 
-                            if tool_name == "start_project":
-                                from server.server import start_project
-
-                                project_result = await asyncio.to_thread(
-                                    start_project,
-                                    **arguments,
-                                )
-
-                                if (
-                                    project_result.get("success")
-                                    and preview_base_url
-                                ):
-                                    project_result["preview_url"] = (
-                                        f"{preview_base_url.rstrip('/')}"
-                                        f"/preview/{project_result['project_id']}/"
-                                    )
-
-                                tool_output = json.dumps(project_result)
-                                tool_error = not project_result.get(
-                                    "success",
-                                    False,
-                                )
-                            else:
-                                result = await session.call_tool(
-                                    tool_name,
-                                    arguments,
-                                )
-
-                                tool_output = "\n".join(
-                                    content.text
-                                    for content in (result.content or [])
-                                    if hasattr(content, "text")
-                                )
-                                tool_error = result.isError
+                            result = await session.call_tool(
+                                tool_name,
+                                arguments,
+                            )
+                            tool_output = "\n".join(
+                                content.text
+                                for content in (result.content or [])
+                                if hasattr(content, "text")
+                            )
+                            tool_error = result.isError
+                            project_result = {}
+                            if tool_name == "start_project" and not tool_error:
+                                try:
+                                    project_result = json.loads(tool_output)
+                                except (json.JSONDecodeError, TypeError):
+                                    project_result = {}
 
                             if (
                                 tool_name == "start_project"
