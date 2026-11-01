@@ -1178,6 +1178,7 @@
         let activeProjectNeedsTitle = false;
         let currentTask = "";
         let chatLoading = false;
+        let filesLoading = false;
 
         const fileList = document.getElementById("file-list");
         const fileCount = document.getElementById("file-count");
@@ -1650,6 +1651,12 @@
         });
 
         async function loadFiles() {
+            if (filesLoading) {
+                return;
+            }
+
+            filesLoading = true;
+
             try {
                 const filesUrl = activeProjectId
                     ? `/api/files?project_id=${encodeURIComponent(activeProjectId)}`
@@ -1724,6 +1731,8 @@
                 message.textContent = error.message;
 
                 fileList.appendChild(message);
+            } finally {
+                filesLoading = false;
             }
         }
 

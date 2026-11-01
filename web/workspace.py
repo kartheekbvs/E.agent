@@ -5,6 +5,33 @@ import shutil
 BASE_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = BASE_DIR / "workspace"
 
+IGNORED_WORKSPACE_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+}
+
+
+def _should_skip_workspace_item(relative_path: Path) -> bool:
+    """Exclude generated dependency and cache directories from the workspace tree."""
+    parts = {part.lower() for part in relative_path.parts}
+    if parts & {name.lower() for name in IGNORED_WORKSPACE_DIRS}:
+        return True
+
+    if any(part.startswith(".") and part not in {"."} for part in relative_path.parts[:-1]):
+        return True
+
+    return False
+
 
 def _get_workspace_dir(workspace_dir=None) -> Path:
     """Return a workspace root, defaulting to the legacy shared workspace."""
@@ -40,9 +67,11 @@ def list_workspace_files(workspace_dir=None):
         if item.is_symlink():
             continue
 
-        if item.is_file():
-            relative_path = item.relative_to(root)
+        relative_path = item.relative_to(root)
+        if _should_skip_workspace_item(relative_path):
+            continue
 
+        if item.is_file():
             files.append({
                 "name": item.name,
                 "path": relative_path.as_posix(),
