@@ -602,6 +602,88 @@
             margin-top: 4px;
             color: var(--muted);
         }
+        
+.github-publish-panel {
+    margin-top: 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+    overflow: hidden;
+}
+
+.github-publish-content {
+    padding: 18px;
+}
+
+.github-publish-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.github-publish-status {
+    margin: 12px 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.github-review-file {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.github-review-file summary {
+    padding: 12px;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    background: var(--panel-light);
+    font-size: 13px;
+}
+
+.github-review-file pre {
+    margin: 0;
+    padding: 14px;
+    overflow: auto;
+    max-height: 300px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #111216;
+    color: var(--text);
+    font: 12px/1.6 Consolas, monospace;
+}
+
+.github-commit-message {
+    width: 100%;
+    margin-top: 14px;
+    padding: 11px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #111216;
+    color: var(--text);
+}
+
+.github-confirm-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 16px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.github-confirm-row input {
+    margin-top: 4px;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+}
+
 
         @media (max-width: 600px) {
             .settings-grid {
@@ -899,6 +981,82 @@
                     <div id="activity-log" class="activity-log">
                         <div class="empty-state">
                             Your agent's progress will appear here.
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="github-publish-panel">
+                <div class="panel-heading">
+                    <h2>Publish to GitHub</h2>
+                    <span class="muted">Review before publishing</span>
+                </div>
+
+                <div class="github-publish-content">
+                    <p class="description">
+                        Review your project's file changes before creating a
+                        commit. Selecting a repository never publishes files.
+                    </p>
+
+                    <div id="publish-destination" class="github-publish-status">
+                        Select a GitHub repository above to get started.
+                    </div>
+
+                    <div class="github-publish-actions">
+                        <button
+                            type="button"
+                            id="publish-preview-button"
+                            class="secondary-button"
+                        >
+                            Generate Review
+                        </button>
+                    </div>
+
+                    <div
+                        id="publish-review-status"
+                        class="github-publish-status"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        No review generated yet.
+                    </div>
+
+                    <div id="publish-review-files"></div>
+
+                    <div id="publish-confirmation" hidden>
+                        <label for="publish-commit-message">
+                            Commit message
+                        </label>
+
+                        <input
+                            id="publish-commit-message"
+                            class="github-commit-message"
+                            type="text"
+                            maxlength="200"
+                            value="Publish changes from Entropy"
+                        >
+
+                        <label class="github-confirm-row">
+                            <input
+                                type="checkbox"
+                                id="publish-confirm-checkbox"
+                            >
+                            <span>
+                                I have reviewed these files and explicitly
+                                approve publishing these changes to the
+                                selected GitHub repository.
+                            </span>
+                        </label>
+
+                        <div class="github-publish-actions">
+                            <button
+                                type="button"
+                                id="publish-confirm-button"
+                                class="primary-button"
+                                disabled
+                            >
+                                Publish to GitHub
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1993,6 +2151,7 @@
 
         function selectGithubRepo(repo) {
             selectedGithubRepo = repo;
+            updatePublishDestination();
 
             githubSelectedRepoLabel.textContent =
                 `${repo.full_name} · ${repo.default_branch || "default branch"}`;
@@ -2364,6 +2523,177 @@
             }
         });
 
+        const publishPreviewButton = document.getElementById("publish-preview-button");
+        const publishReviewStatus = document.getElementById("publish-review-status");
+        const publishReviewFiles = document.getElementById("publish-review-files");
+        const publishConfirmation = document.getElementById("publish-confirmation");
+        const publishCommitMessage = document.getElementById("publish-commit-message");
+        const publishConfirmCheckbox = document.getElementById("publish-confirm-checkbox");
+        const publishConfirmButton = document.getElementById("publish-confirm-button");
+        const publishDestination = document.getElementById("publish-destination");
+
+        function resetPublishReviewState() {
+            publishReviewStatus.textContent = "No review generated yet.";
+            publishReviewFiles.innerHTML = "";
+            publishConfirmation.hidden = true;
+            publishConfirmCheckbox.checked = false;
+            publishConfirmButton.disabled = true;
+        }
+
+        function updatePublishDestination() {
+            if (!selectedGithubRepo) {
+                publishDestination.textContent = "Select a GitHub repository above to get started.";
+                resetPublishReviewState();
+                return;
+            }
+
+            publishDestination.textContent =
+                `Reviewing changes for ${selectedGithubRepo.full_name} on ${selectedGithubRepo.default_branch || "default branch"}.`;
+            publishReviewStatus.textContent = "Ready to generate a review.";
+        }
+
+        async function generatePublishReview() {
+            if (!selectedGithubRepo) {
+                publishReviewStatus.textContent = "Please select a GitHub repository first.";
+                return;
+            }
+
+            if (!activeProjectId) {
+                publishReviewStatus.textContent = "Please open or create a project first.";
+                return;
+            }
+
+            publishPreviewButton.disabled = true;
+            publishReviewStatus.textContent = "Generating the review snapshot...";
+            publishReviewFiles.innerHTML = "";
+            publishConfirmation.hidden = true;
+            publishConfirmCheckbox.checked = false;
+            publishConfirmButton.disabled = true;
+
+            try {
+                const response = await fetch("/api/github/publish/preview", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "same-origin",
+                    body: JSON.stringify({
+                        project_id: activeProjectId,
+                        repository: selectedGithubRepo.full_name,
+                        branch: selectedGithubRepo.default_branch || "main"
+                    })
+                });
+
+                const data = await response.json().catch(() => ({}));
+
+                if (!response.ok) {
+                    throw new Error(data.detail || "Could not generate the GitHub review.");
+                }
+
+                const reviewId = data.review_id;
+                const changes = Array.isArray(data.changes) ? data.changes : [];
+                const repo = data.repository || selectedGithubRepo.full_name;
+                const branch = data.branch || selectedGithubRepo.default_branch || "main";
+
+                window.currentPublishReviewId = reviewId || null;
+
+                if (!reviewId || changes.length === 0) {
+                    publishReviewStatus.textContent =
+                        data.message || "No file changes are ready to publish.";
+                    return;
+                }
+
+                publishReviewStatus.textContent =
+                    `Review ready for ${repo} on ${branch}. ${changes.length} file${changes.length === 1 ? "" : "s"} identified.`;
+
+                publishReviewFiles.innerHTML = "";
+                for (const item of changes) {
+                    const wrapper = document.createElement("details");
+                    wrapper.className = "github-review-file";
+                    const summary = document.createElement("summary");
+                    summary.textContent = `${item.status === "added" ? "Added" : "Modified"}: ${item.path}`;
+                    const code = document.createElement("pre");
+                    code.textContent = item.content || "";
+                    wrapper.append(summary, code);
+                    publishReviewFiles.appendChild(wrapper);
+                }
+
+                publishConfirmation.hidden = false;
+                publishConfirmButton.disabled = true;
+                publishConfirmCheckbox.checked = false;
+            } catch (error) {
+                publishReviewStatus.textContent = error.message;
+                publishReviewFiles.innerHTML = "";
+                publishConfirmation.hidden = true;
+            } finally {
+                publishPreviewButton.disabled = false;
+            }
+        }
+
+        publishPreviewButton.addEventListener("click", generatePublishReview);
+
+        publishConfirmCheckbox.addEventListener("change", () => {
+            publishConfirmButton.disabled = !publishConfirmCheckbox.checked;
+        });
+
+        publishConfirmButton.addEventListener("click", async () => {
+            if (!selectedGithubRepo || !activeProjectId) {
+                publishReviewStatus.textContent = "Select a project and repository before publishing.";
+                return;
+            }
+
+            const reviewId = window.currentPublishReviewId;
+            if (!reviewId) {
+                publishReviewStatus.textContent = "Generate a review before confirming a publish.";
+                return;
+            }
+
+            if (!publishConfirmCheckbox.checked) {
+                publishReviewStatus.textContent = "Please confirm the review before publishing.";
+                return;
+            }
+
+            const message = (publishCommitMessage.value || "Publish changes from Entropy").trim();
+            if (!message) {
+                publishReviewStatus.textContent = "Please enter a commit message.";
+                return;
+            }
+
+            publishConfirmButton.disabled = true;
+            publishReviewStatus.textContent = "Publishing to GitHub...";
+
+            try {
+                const response = await fetch("/api/github/publish/confirm", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "same-origin",
+                    body: JSON.stringify({
+                        review_id: reviewId,
+                        confirmed: true,
+                        commit_message: message
+                    })
+                });
+
+                const data = await response.json().catch(() => ({}));
+
+                if (!response.ok) {
+                    throw new Error(data.detail || "GitHub publishing failed.");
+                }
+
+                publishReviewStatus.textContent =
+                    `Published successfully to ${selectedGithubRepo.full_name} with commit ${data.commit_sha || ""}.`;
+                publishConfirmation.hidden = true;
+                publishConfirmCheckbox.checked = false;
+                publishConfirmButton.disabled = true;
+                window.currentPublishReviewId = null;
+            } catch (error) {
+                publishReviewStatus.textContent = error.message;
+                publishConfirmButton.disabled = false;
+            }
+        });
+
         logoutButton.addEventListener("click", async () => {
             if (taskRunning) {
                 window.alert(
@@ -2391,7 +2721,7 @@
             }
         });
 
-
+        window.currentPublishReviewId = null;
 
         // Load the current workspace when the page opens.
         loadChats();

@@ -12,6 +12,8 @@ class LLM:
         self.client = OpenAI(
             base_url=os.getenv("base_url"),
             api_key=os.getenv("api_key"),
+            max_retries=3,
+            timeout=60.0,
         )
         self.model = os.getenv("LLM_MODEL")
 

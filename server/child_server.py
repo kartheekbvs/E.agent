@@ -95,6 +95,18 @@ def read_file(path: str) -> dict:
         "content": content,
     }
 
+@mcp.tool()
+def write_file(path: str, content: str) -> str:
+    """Write text content to a file inside the child agent's workspace."""
+    try:
+        file_path = resolve_workspace_path(path)
+        if file_path.is_dir():
+            return f"Error: Path is a directory: {path}"
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        return f"Successfully wrote file: {path}"
+    except (OSError, ValueError) as error:
+        return f"Error writing file: {error}"
 
 if __name__ == "__main__":
     mcp.run()

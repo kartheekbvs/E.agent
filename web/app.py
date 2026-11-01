@@ -9,6 +9,15 @@ from connectors.github.client import (
     get_repository_tree,
      read_repository_file,
 )
+import time
+
+from web.github_publish_registry import (
+    initialize_publish_registry,
+    create_publish_review,
+    consume_publish_review,
+    get_publish_review,
+)
+import logging
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import (
@@ -18,12 +27,19 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from web.project_records import list_projects_for_chat
+from connectors.github.client import (
+    list_repositories,
+    get_repository_tree,
+    read_repository_file,
+    get_branch_head,
+    publish_file_changes,
+)
 from connectors.github.auth import (
-    build_authorization_url,
     generate_oauth_state,
     generate_pkce_pair,
     save_oauth_transaction,
     consume_oauth_transaction,
+    build_authorization_url,
     exchange_code_for_token,
     save_github_connection,
 )
@@ -65,6 +81,29 @@ from server.server import PROJECTS
 load_dotenv()
 
 app = FastAPI(title="Entropy")
+
+
+def _request_public_base_url(request: Request) -> str:
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    request_base = (
+        f"{forwarded_proto}://{forwarded_host}"
+        if forwarded_proto and forwarded_host
+        else str(request.base_url).rstrip("/")
+    )
+
+    if "localhost" in request_base or "127.0.0.1" in request_base:
+        return request_base
+
+    configured = (
+        os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("APP_PUBLIC_URL")
+        or os.getenv("RENDER_EXTERNAL_URL")
+    )
+    if configured:
+        return configured.rstrip("/")
+
+    return request_base
 
 
 def _rewrite_preview_urls(
@@ -142,7 +181,14 @@ app.add_middleware(
     https_only=os.getenv("SESSION_COOKIE_SECURE", "").lower()
     in {"1", "true", "yes"},
 )
-
+class GitHubPublishPreviewRequest(BaseModel):
+    project_id: str
+    repository: str
+    branch: str | None = None
+class GitHubPublishConfirmRequest(BaseModel):
+    review_id: str
+    confirmed: bool
+    commit_message: str = "Publish changes from Entropy"
 
 # Request models
 
@@ -161,7 +207,7 @@ class AuthRequest(BaseModel):
 # Initialize the user database
 initialize_database()
 
-
+initialize_publish_registry()
 # Authentication dependency
 def require_login(request: Request):
     user_id = request.session.get("user_id")
@@ -303,11 +349,11 @@ async def github_login(request: Request):
         )
 
     except Exception:
-        # Do not expose credentials or internal exception details.
+        logging.exception("Failed to start GitHub OAuth")
         raise HTTPException(
-            status_code=500,
-            detail="Could not start GitHub authorization.",
-        )
+        status_code=500,
+        detail="Could not start GitHub authorization.",
+    )
 
 
 @app.get("/github/callback")
@@ -431,6 +477,251 @@ async def create_chat_api(
         ) from error
 
 
+@app.post("/api/github/publish/confirm")
+async def confirm_github_publish(
+    data: GitHubPublishConfirmRequest,
+    request: Request,
+):
+    user_id = require_login(request)
+
+    if data.confirmed is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit confirmation is required before publishing.",
+        )
+
+    commit_message = data.commit_message.strip()
+    if not commit_message or len(commit_message) > 200:
+        raise HTTPException(
+            status_code=400,
+            detail="Commit message must contain 1–200 characters.",
+        )
+
+    # Consume the approval atomically. Reviews are user-bound,
+    # expire after 30 minutes, and can only be used once.
+    review = consume_publish_review(
+        review_id=data.review_id,
+        owner_id=user_id,
+        now=int(time.time()),
+    )
+
+    if review is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This review is invalid, expired, or already used. "
+                "Generate a new publishing preview."
+            ),
+        )
+
+    repository = review["repository"]
+    parts = repository.split("/")
+
+    if len(parts) != 2 or not all(parts):
+        raise HTTPException(
+            status_code=400,
+            detail="The saved review contains an invalid repository.",
+        )
+
+    owner, repo = parts
+
+    # Validate the saved snapshot before contacting GitHub.
+    changes = review["changes"]
+    if not isinstance(changes, list) or not changes:
+        raise HTTPException(
+            status_code=400,
+            detail="The saved review contains no publishable changes.",
+        )
+
+    publish_changes = []
+    seen_paths = set()
+
+    for item in changes:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="The saved review contains an invalid change.",
+            )
+
+        path = item.get("path")
+        content = item.get("content")
+        status = item.get("status")
+
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="The saved review contains an invalid file path.",
+            )
+
+        path_parts = path.split("/")
+        filename = path_parts[-1].lower()
+
+        if (
+            any(part.lower() in PUBLISH_EXCLUDED_DIRS for part in path_parts)
+            or filename in PUBLISH_EXCLUDED_NAMES
+            or filename.startswith(".env.")
+            or filename.endswith(tuple(PUBLISH_EXCLUDED_SUFFIXES))
+            or any(
+                marker in filename
+                for marker in (
+                    "credentials",
+                    "credential",
+                    "secret",
+                    "private_key",
+                    "private-key",
+                )
+            )
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="The saved review contains a protected file path.",
+            )
+
+        if path in seen_paths:
+            raise HTTPException(
+                status_code=400,
+                detail="The saved review contains duplicate file paths.",
+            )
+
+        if status not in {"added", "modified"}:
+            raise HTTPException(
+                status_code=400,
+                detail="The saved review contains an unsupported change type.",
+            )
+
+        if not isinstance(content, str) or "\x00" in content:
+            raise HTTPException(
+                status_code=400,
+                detail="The saved review contains invalid file content.",
+            )
+
+        if len(content.encode("utf-8")) > 1_000_000:
+            raise HTTPException(
+                status_code=400,
+                detail="A reviewed file exceeds the 1 MB publishing limit.",
+            )
+
+        seen_paths.add(path)
+        publish_changes.append({
+            "path": path,
+            "content": content,
+        })
+
+    try:
+        # Confirm that the project still belongs to this user.
+        project_context = prepare_project_runtime(
+            project_id=review["project_id"],
+            user_id=user_id,
+        )
+
+        remote_tree = await get_repository_tree(
+            user_id=user_id,
+            owner=owner,
+            repo=repo,
+            branch=review["branch"],
+        )
+
+        if remote_tree.get("truncated"):
+            raise HTTPException(
+                status_code=409,
+                detail="GitHub returned an incomplete tree. Generate a new preview.",
+            )
+
+        if remote_tree["commit_sha"] != review["base_head_sha"]:
+            raise HTTPException(
+                status_code=409,
+                detail="The GitHub branch changed. Generate a new preview.",
+            )
+
+        _validate_publish_snapshot(
+            workspace_path=project_context["workspace_path"],
+            reviewed_changes=changes,
+            remote_tree=remote_tree,
+        )
+
+        # Recheck GitHub's current branch head before publishing.
+        current_head = await get_branch_head(
+            user_id=user_id,
+            owner=owner,
+            repo=repo,
+            branch=review["branch"],
+        )
+
+        if current_head["commit_sha"] != review["base_head_sha"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The GitHub branch changed after the preview. "
+                    "Generate and review a new preview before publishing."
+                ),
+            )
+
+        result = await publish_file_changes(
+            user_id=user_id,
+            owner=owner,
+            repo=repo,
+            branch=review["branch"],
+            expected_head_sha=review["base_head_sha"],
+            changes=publish_changes,
+            message=commit_message,
+        )
+
+        return {
+            "success": True,
+            "repository": result["repository"],
+            "branch": result["branch"],
+            "commit_sha": result["commit_sha"],
+            "commit_url": result["commit_url"],
+            "files_published": result["files_published"],
+            "message": "Reviewed changes were published successfully.",
+        }
+
+    except HTTPException:
+        raise
+    except PermissionError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except httpx.HTTPStatusError as error:
+        status_code = error.response.status_code
+
+        if status_code in {401, 403, 404}:
+            raise HTTPException(
+                status_code=status_code,
+                detail=(
+                    "GitHub denied the publishing request. "
+                    "Check repository access and permissions."
+                ),
+            ) from error
+
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub could not complete the publishing request.",
+        ) from error
+    except httpx.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to GitHub.",
+        ) from error
+    except Exception as error:
+        logging.exception("GitHub publishing failed")
+        raise HTTPException(
+            status_code=500,
+            detail="GitHub publishing failed unexpectedly.",
+        ) from error
+
 @app.patch("/api/chats/{chat_id}")
 def rename_chat(
     chat_id: str,
@@ -475,6 +766,306 @@ async def list_projects_for_chat_api(
         raise HTTPException(
             status_code=500,
             detail="Could not load projects.",
+        ) from error
+
+import hashlib
+
+
+PUBLISH_EXCLUDED_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
+
+PUBLISH_EXCLUDED_NAMES = {
+    ".env",
+    "memory.entropy",
+}
+
+PUBLISH_EXCLUDED_SUFFIXES = {
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".sqlite",
+    ".db",
+}
+
+
+def _publishable_workspace_files(workspace_path: Path) -> dict[str, str]:
+    """Read safe, UTF-8 text files from one project's workspace."""
+    files = {}
+
+    root = workspace_path.resolve(strict=True)
+
+    for path in root.rglob("*"):
+        # Never follow or publish symbolic links.
+        if path.is_symlink():
+            continue
+
+        if not path.is_file():
+            continue
+
+        relative = path.relative_to(root)
+        parts = relative.parts
+        filename = path.name.lower()
+
+        if any(part.lower() in PUBLISH_EXCLUDED_DIRS for part in parts):
+            continue
+
+        if filename in PUBLISH_EXCLUDED_NAMES:
+            continue
+
+        if filename.startswith(".env."):
+            continue
+
+        if filename.endswith(tuple(PUBLISH_EXCLUDED_SUFFIXES)):
+            continue
+
+        # Exclude common private-key and credential files.
+        if any(
+            marker in filename
+            for marker in (
+                "credentials",
+                "credential",
+                "secret",
+                "private_key",
+                "private-key",
+            )
+        ):
+            continue
+
+        if path.stat().st_size > 1_000_000:
+            continue
+
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+
+        if "\x00" in content:
+            continue
+
+        files[relative.as_posix()] = content
+
+    return files
+
+
+def _git_blob_sha(content: str) -> str:
+    """Calculate Git's SHA-1 for a UTF-8 file blob."""
+    encoded = content.encode("utf-8")
+    header = f"blob {len(encoded)}\0".encode("ascii")
+    return hashlib.sha1(header + encoded).hexdigest()
+
+def _validate_publish_snapshot(
+    workspace_path: Path,
+    reviewed_changes: list[dict],
+    remote_tree: dict,
+) -> None:
+    """Verify the complete local change set still matches the review."""
+    current_files = _publishable_workspace_files(workspace_path)
+    remote_files = {
+        item["path"]: item["sha"]
+        for item in remote_tree["entries"]
+        if item["type"] == "blob"
+    }
+    current_changes = {}
+    for path, content in current_files.items():
+        local_sha = _git_blob_sha(content)
+        remote_sha = remote_files.get(path)
+        if remote_sha is None:
+            status = "added"
+        elif remote_sha != local_sha:
+            status = "modified"
+        else:
+            continue
+        current_changes[path] = {
+            "path": path,
+            "status": status,
+            "content": content,
+        }
+    reviewed = {
+        item["path"]: {
+            "path": item["path"],
+            "status": item["status"],
+            "content": item["content"],
+        }
+        for item in reviewed_changes
+    }
+    if current_changes != reviewed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The project's files or changes differ from the reviewed "
+                "snapshot. Generate a new preview and review it again."
+            ),
+        )
+
+
+
+@app.post("/api/github/publish/preview")
+async def preview_github_publish(
+    data: GitHubPublishPreviewRequest,
+    request: Request,
+):
+    user_id = require_login(request)
+
+    repository = data.repository.strip()
+    parts = repository.split("/")
+
+    if (
+        len(parts) != 2
+        or not all(parts)
+        or any(part in {".", ".."} for part in parts)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Repository must use the owner/repo format.",
+        )
+
+    owner, repo = parts
+
+    try:
+        project_context = prepare_project_runtime(
+            project_id=data.project_id,
+            user_id=user_id,
+        )
+        workspace_path = project_context["workspace_path"]
+
+        remote_tree = await get_repository_tree(
+            user_id=user_id,
+            owner=owner,
+            repo=repo,
+            branch=data.branch,
+        )
+
+        if remote_tree.get("truncated"):
+            raise HTTPException(
+                status_code=502,
+                detail="GitHub returned an incomplete tree. Preview was stopped.",
+            )
+
+        head = await get_branch_head(
+            user_id=user_id,
+            owner=owner,
+            repo=repo,
+            branch=remote_tree["branch"],
+        )
+        if remote_tree["commit_sha"] != head["commit_sha"]:
+            raise HTTPException(
+        status_code=409,
+        detail=(
+            "The GitHub branch changed while preparing the preview. "
+            "Please generate the preview again."
+        ),
+    )
+        local_files = _publishable_workspace_files(workspace_path)
+
+        remote_files = {
+            item["path"]: item["sha"]
+            for item in remote_tree["entries"]
+            if item["type"] == "blob"
+        }
+
+        # Keep file contents in the server-side review only.
+        review_changes = []
+        public_changes = []
+
+        for path, content in sorted(local_files.items()):
+            local_sha = _git_blob_sha(content)
+            remote_sha = remote_files.get(path)
+
+            if remote_sha is None:
+                status = "added"
+            elif remote_sha != local_sha:
+                status = "modified"
+            else:
+                continue
+
+            review_changes.append({
+                "path": path,
+                "status": status,
+                "content": content,
+            })
+
+            public_changes.append({
+                "path": path,
+                "status": status,
+                "content": content,
+            })
+
+        # Missing local files do not imply remote deletions.
+        review_id = None
+
+        if review_changes:
+            review_id = create_publish_review(
+                owner_id=user_id,
+                project_id=project_context["project"]["id"],
+                repository=remote_tree["repository"],
+                branch=remote_tree["branch"],
+                base_head_sha=head["commit_sha"],
+                changes=review_changes,
+                created_at=int(time.time()),
+            )
+
+        return {
+            "success": True,
+            "project_id": project_context["project"]["id"],
+            "repository": remote_tree["repository"],
+            "branch": remote_tree["branch"],
+            "base_head_sha": head["commit_sha"],
+            "review_id": review_id,
+            "changes": public_changes,
+            "change_count": len(public_changes),
+            "message": (
+                "Review snapshot saved. No GitHub changes have been published."
+                if review_id
+                else "No file changes to publish. No GitHub changes have been published."
+            ),
+        }
+
+    except HTTPException:
+        raise
+    except PermissionError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+    except httpx.HTTPStatusError as error:
+        status_code = error.response.status_code
+
+        if status_code in {401, 403, 404}:
+            raise HTTPException(
+                status_code=status_code,
+                detail=(
+                    "GitHub denied access to the repository or branch. "
+                    "Check your connection and permissions."
+                ),
+            ) from error
+
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub failed to prepare the publishing preview.",
+        ) from error
+    except httpx.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to GitHub.",
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not prepare the publishing preview.",
         ) from error
 
 
@@ -626,19 +1217,7 @@ async def receive_task(
         else:
             agent = MCPToolDiscovery()
 
-        forwarded_proto = http_request.headers.get("x-forwarded-proto")
-        forwarded_host = http_request.headers.get("x-forwarded-host")
-        forwarded_host = forwarded_host or http_request.headers.get("host")
-        public_base_url = (
-            os.getenv("PUBLIC_BASE_URL")
-            or os.getenv("APP_PUBLIC_URL")
-            or os.getenv("RENDER_EXTERNAL_URL")
-            or (
-                f"{forwarded_proto}://{forwarded_host}"
-                if forwarded_proto and forwarded_host
-                else str(http_request.base_url).rstrip("/")
-            )
-        )
+        public_base_url = _request_public_base_url(http_request)
 
         answer = await agent.run_task(
             task,
@@ -745,19 +1324,7 @@ async def stream_task(
                         f"{agent_task}\n\nProject memory summary:\n{memory_summary}"
                     )
 
-                forwarded_proto = http_request.headers.get("x-forwarded-proto")
-                forwarded_host = http_request.headers.get("x-forwarded-host")
-                forwarded_host = forwarded_host or http_request.headers.get("host")
-                public_base_url = (
-                    os.getenv("PUBLIC_BASE_URL")
-                    or os.getenv("APP_PUBLIC_URL")
-                    or os.getenv("RENDER_EXTERNAL_URL")
-                    or (
-                        f"{forwarded_proto}://{forwarded_host}"
-                        if forwarded_proto and forwarded_host
-                        else str(http_request.base_url).rstrip("/")
-                    )
-                )
+                public_base_url = _request_public_base_url(http_request)
 
                 answer = await agent.run_task(
                     agent_task,
@@ -1286,3 +1853,44 @@ async def list_chat_projects_api(
             status_code=500,
             detail="Could not load chat projects.",
         ) from error
+
+@app.get("/api/github/publish/review/{review_id}")
+async def get_github_publish_review(
+    review_id: str,
+    request: Request,
+):
+    user_id = require_login(request)
+
+    review = get_publish_review(
+        review_id=review_id,
+        owner_id=user_id,
+        now=int(time.time()),
+    )
+
+    if review is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Review not found, expired, or already used.",
+        )
+
+    # Return only the details needed to inspect the proposed changes.
+    public_changes = [
+        {
+            "path": item["path"],
+            "status": item["status"],
+            "content": item["content"],
+        }
+        for item in review["changes"]
+    ]
+
+    return {
+        "success": True,
+        "review_id": review["review_id"],
+        "project_id": review["project_id"],
+        "repository": review["repository"],
+        "branch": review["branch"],
+        "base_head_sha": review["base_head_sha"],
+        "change_count": len(public_changes),
+        "changes": public_changes,
+        "message": "Review loaded for inspection. Nothing has been published.",
+    }

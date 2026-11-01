@@ -138,6 +138,7 @@ async def get_repository_tree(
         branch_response.raise_for_status()
         branch_data = branch_response.json()
         tree_sha = branch_data["commit"]["commit"]["tree"]["sha"]
+        commit_sha = branch_data["commit"]["sha"]
 
         # Fetch the recursive tree.
         tree_response = await client.get(
@@ -161,14 +162,15 @@ async def get_repository_tree(
     ]
 
     return {
-        "success": True,
-        "repository": repository["full_name"],
-        "branch": selected_branch,
-        "default_branch": repository["default_branch"],
-        "truncated": tree_data.get("truncated", False),
-        "count": len(entries),
-        "entries": entries,
-    }
+    "success": True,
+    "repository": repository["full_name"],
+    "branch": selected_branch,
+    "default_branch": repository["default_branch"],
+    "commit_sha": commit_sha,
+    "truncated": tree_data.get("truncated", False),
+    "count": len(entries),
+    "entries": entries,
+}
 
 import base64
 
@@ -250,4 +252,200 @@ async def read_repository_file(
         "path": path,
         "size": file_data.get("size", len(content)),
         "content": text_content,
+    }
+
+async def get_branch_head(
+    user_id: int,
+    owner: str,
+    repo: str,
+    branch: str,
+) -> dict:
+    """Return the current branch commit and tree SHAs."""
+    token = get_github_token(user_id)
+
+    if token is None:
+        raise ValueError("No GitHub account is connected.")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    url = (
+        f"{GITHUB_API_BASE}/repos/"
+        f"{quote(owner, safe='')}/{quote(repo, safe='')}/branches/"
+        f"{quote(branch, safe='')}"
+    )
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+    return {
+        "branch": data["name"],
+        "commit_sha": data["commit"]["sha"],
+        "tree_sha": data["commit"]["commit"]["tree"]["sha"],
+    }
+
+
+async def publish_file_changes(
+    user_id: int,
+    owner: str,
+    repo: str,
+    branch: str,
+    expected_head_sha: str,
+    changes: list[dict],
+    message: str,
+) -> dict:
+    """
+    Publish reviewed file changes as one commit.
+
+    Each change must contain:
+        {"path": "relative/file.py", "content": "file contents"}
+
+    This function refuses to publish if the branch has changed
+    since the review snapshot was created.
+    """
+    import re
+
+    token = get_github_token(user_id)
+
+    if token is None:
+        raise ValueError("No GitHub account is connected.")
+
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head_sha):
+        raise ValueError("Invalid reviewed branch commit SHA.")
+
+    if not changes:
+        raise ValueError("There are no file changes to publish.")
+
+    message = message.strip()
+    if not message or len(message) > 200:
+        raise ValueError("Commit message must contain 1–200 characters.")
+
+    seen_paths = set()
+    for item in changes:
+        path = item.get("path")
+        content = item.get("content")
+
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+        ):
+            raise ValueError("A change contains an invalid file path.")
+
+        if path in seen_paths:
+            raise ValueError(f"Duplicate file path: {path}")
+
+        if not isinstance(content, str):
+            raise ValueError(f"File content must be text: {path}")
+
+        if "\x00" in content:
+            raise ValueError(f"Binary files are not supported: {path}")
+
+        seen_paths.add(path)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    base = (
+        f"{GITHUB_API_BASE}/repos/"
+        f"{quote(owner, safe='')}/{quote(repo, safe='')}"
+    )
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Recheck the branch immediately before creating Git objects.
+        branch_response = await client.get(
+            f"{base}/branches/{quote(branch, safe='')}",
+            headers=headers,
+        )
+        branch_response.raise_for_status()
+        branch_data = branch_response.json()
+
+        current_head = branch_data["commit"]["sha"]
+        base_tree_sha = branch_data["commit"]["commit"]["tree"]["sha"]
+
+        if current_head != expected_head_sha:
+            raise ValueError(
+                "The GitHub branch changed after review. "
+                "Refresh the preview and review the changes again."
+            )
+
+        # Create one Git blob for each reviewed file.
+        tree_items = []
+
+        for item in changes:
+            blob_response = await client.post(
+                f"{base}/git/blobs",
+                headers=headers,
+                json={
+                    "content": item["content"],
+                    "encoding": "utf-8",
+                },
+            )
+            blob_response.raise_for_status()
+            blob_sha = blob_response.json()["sha"]
+
+            tree_items.append({
+                "path": item["path"],
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob_sha,
+            })
+
+        # Build a new tree on top of the existing tree so unrelated
+        # files in the remote repository remain untouched.
+        tree_response = await client.post(
+            f"{base}/git/trees",
+            headers=headers,
+            json={
+                "base_tree": base_tree_sha,
+                "tree": tree_items,
+            },
+        )
+        tree_response.raise_for_status()
+        new_tree_sha = tree_response.json()["sha"]
+
+        # Create a single commit whose parent is the reviewed head.
+        commit_response = await client.post(
+            f"{base}/git/commits",
+            headers=headers,
+            json={
+                "message": message,
+                "tree": new_tree_sha,
+                "parents": [current_head],
+            },
+        )
+        commit_response.raise_for_status()
+        commit_sha = commit_response.json()["sha"]
+
+        # Move the branch only if this is still a fast-forward update.
+        # If another commit raced with us, GitHub should reject it.
+        update_response = await client.patch(
+            f"{base}/git/refs/heads/{quote(branch, safe='')}",
+            headers=headers,
+            json={
+                "sha": commit_sha,
+                "force": False,
+            },
+        )
+        update_response.raise_for_status()
+
+    return {
+        "success": True,
+        "repository": f"{owner}/{repo}",
+        "branch": branch,
+        "commit_sha": commit_sha,
+        "commit_url": (
+            f"https://github.com/{owner}/{repo}/commit/{commit_sha}"
+        ),
+        "files_published": len(changes),
     }

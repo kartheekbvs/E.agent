@@ -2,13 +2,13 @@
 import os
 import json
 from pathlib import Path
+import asyncio
+
 from dotenv import load_dotenv
 from openai import OpenAI
-import asyncio
-import json
-
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
 load_dotenv()
 WORKSPACE_ROOT = Path("workspace").resolve()
 
@@ -31,6 +31,8 @@ class MultiAgent:
         self.client = OpenAI(
             base_url=base_url,
             api_key=api_key,
+            max_retries=3,
+            timeout=60.0,
         )
 
     def generate(self, messages, tools=None):
@@ -53,8 +55,6 @@ class MultiAgent:
         coding_level="college",
         on_progress=None,
     ):
-        s
-        
         workspace = os.environ.get("ENTROPY_WORKSPACE")
 
         child_env = os.environ.copy()
@@ -63,10 +63,10 @@ class MultiAgent:
             child_env["ENTROPY_WORKSPACE"] = workspace
 
         server_params = StdioServerParameters(
-    command="uv",
-    args=["run", "mcp", "run", "server/child_server.py"],
-    env=child_env,
-)
+            command="uv",
+            args=["run", "mcp", "run", "server/child_server.py"],
+            env=child_env,
+        )
 
 
         if on_progress:

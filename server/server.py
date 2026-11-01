@@ -204,15 +204,34 @@ def wait_for_server(
 
 
 def get_public_preview_base_url() -> str:
+    # Local development always uses the loopback preview URL. Public host
+    # variables are only relevant when the app is actually running in a
+    # deployment environment such as Render or a public proxy.
+    if not (
+        os.getenv("RENDER")
+        or os.getenv("DYNO")
+        or os.getenv("DEPLOYMENT_MODE") == "production"
+    ):
+        return "http://127.0.0.1"
+
     for env_name in (
         "PUBLIC_BASE_URL",
         "APP_PUBLIC_URL",
+        "APP_URL",
+        "BASE_URL",
         "RENDER_EXTERNAL_URL",
         "RENDER_URL",
+        "HOST",
+        "DOMAIN",
     ):
         value = os.getenv(env_name)
         if value:
-            return value.rstrip("/")
+            value = value.strip().rstrip("/")
+            if value.startswith("http://") or value.startswith("https://"):
+                return value
+            if value.startswith("localhost") or value.startswith("127.0.0.1"):
+                return f"http://{value}"
+            return f"https://{value}"
 
     return "http://127.0.0.1"
 
