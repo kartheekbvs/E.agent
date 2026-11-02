@@ -694,37 +694,121 @@ def write_file(path: str, content: str) -> str:
         return f"Error writing file: {error}"
 
 
-# @mcp.tool()
-# def run_command(command: str) -> dict[str, str | int]:
-#     """Run a command in the workspace and return its output."""
-#     restricted_commands = ["rm", "del", "rmdir", "shutdown", "reboot", "format", "mkfs", "fdisk", "diskpart"]
-#     try:
-#         command_parts = shlex.split(command)
-#     except ValueError as error:
-#         return {"output": "", "error": str(error), "returncode": -1}
-#     if not command_parts:
-#         return {"output": "", "error": "Command cannot be empty", "returncode": -1}
-#     if command_parts[0].lower() in restricted_commands:
-#         return {
-#             "output": "",
-#             "error": f"Command '{command_parts[0]}' is restricted and cannot be executed.",
-#             "returncode": -1,
-#         }
-#     try:
-#         result = subprocess.run(
-#             command,
-#             shell=True,
-#             capture_output=True,
-#             text=True,
-#             cwd=WORKSPACE,
-#         )
-#         return {
-#             "output": result.stdout,
-#             "error": result.stderr,
-#             "returncode": result.returncode,
-#         }
-#     except OSError as error:
-#         return {"output": "", "error": str(error), "returncode": -1}
+@mcp.tool()
+def write_selected(path: str, start_line: int, end_line: int, content: str) -> dict:
+    """Replace only a selected line range to minimize token and edit churn."""
+    try:
+        target = resolve_path(path)
+        if target.is_dir():
+            return {"success": False, "error": f"Path is a directory: {path}"}
+        if start_line < 1 or end_line < start_line:
+            return {"success": False, "error": "Invalid line range."}
+        if not target.exists():
+            return {"success": False, "error": f"File does not exist: {path}"}
+
+        existing = target.read_text(encoding="utf-8").splitlines(keepends=True)
+        start_index = max(0, start_line - 1)
+        end_index = min(len(existing), end_line)
+        replacement = content.splitlines(keepends=True)
+        updated = existing[:start_index] + replacement + existing[end_index:]
+        target.write_text("".join(updated), encoding="utf-8")
+
+        return {
+            "success": True,
+            "path": path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "updated": True,
+        }
+    except (OSError, ValueError, UnicodeError) as error:
+        return {"success": False, "error": str(error)}
+
+
+@mcp.tool()
+def read_memory(key: str = "default") -> dict:
+    """Read a concise summary from the workspace cache to reduce re-reading context."""
+    cache_dir = WORKSPACE / ".entropy-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    memory_path = cache_dir / f"{key}.txt"
+
+    if not memory_path.exists():
+        return {"success": True, "exists": False, "content": ""}
+
+    return {
+        "success": True,
+        "exists": True,
+        "content": memory_path.read_text(encoding="utf-8"),
+    }
+
+
+@mcp.tool()
+def write_memory(key: str = "default", content: str = "") -> dict:
+    """Persist a short project summary for future tasks and context reuse."""
+    cache_dir = WORKSPACE / ".entropy-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    memory_path = cache_dir / f"{key}.txt"
+    memory_path.write_text(content, encoding="utf-8")
+    return {"success": True, "key": key, "path": str(memory_path)}
+
+
+@mcp.tool()
+def run_command(command: str, cwd: str = ".") -> dict[str, str | int]:
+    """Run a restricted workspace command and return concise output."""
+    allowed = {
+        "python",
+        "python3",
+        "python.exe",
+        "pip",
+        "pip3",
+        "uv",
+        "npm",
+        "node",
+        "npx",
+        "pytest",
+        "py",
+        "git",
+        "ls",
+        "pwd",
+        "grep",
+        "rg",
+        "find",
+        "cat",
+    }
+
+    try:
+        command_parts = shlex.split(command)
+    except ValueError as error:
+        return {"success": False, "error": str(error), "returncode": -1}
+
+    if not command_parts:
+        return {"success": False, "error": "Command cannot be empty.", "returncode": -1}
+
+    binary = Path(command_parts[0]).name
+    if binary.lower() not in {item.lower() for item in allowed}:
+        return {"success": False, "error": f"Command is not allowed: {binary}", "returncode": -1}
+
+    try:
+        target_dir = resolve_path(cwd)
+    except ValueError as error:
+        return {"success": False, "error": str(error), "returncode": -1}
+
+    try:
+        result = subprocess.run(
+            command_parts,
+            cwd=str(target_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        return {
+            "success": result.returncode == 0,
+            "returncode": result.returncode,
+            "stdout": (result.stdout or "")[:4000],
+            "stderr": (result.stderr or "")[:2000],
+        }
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"success": False, "error": str(error), "returncode": -1}
 
 
 @mcp.tool()

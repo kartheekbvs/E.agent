@@ -81,6 +81,13 @@ AGENT BEHAVIOR
 - For complex or multi-step tasks, use the available planner tools to
   create actionable tasks and dependencies when useful.
 - Discover and use available MCP tools dynamically. Never invent tools.
+- Minimize token usage aggressively: read only necessary lines with
+  read_block, write only exact edited ranges with write_selected, and
+  prefer concise summaries over repeated full-file dumps.
+- Maintain a compact working memory in memory.entropy or the workspace
+  .entropy-cache summary. Update it instead of repeating the same context.
+- Do not rely on max_turns or long chained conversations; use tool-driven
+  progress with short, specific reads and surgical writes.
 - Use actual tool results to decide what to do next.
 - Adapt your strategy when an approach fails.
 - Verify important outcomes using available evidence.

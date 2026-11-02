@@ -1,7 +1,10 @@
 
 
 import os
+import shlex
+import subprocess
 from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("entropy-child")
@@ -10,7 +13,26 @@ WORKSPACE_ROOT = Path(
     os.environ.get("ENTROPY_WORKSPACE", "workspace")
 ).resolve()
 
-
+SAFE_COMMANDS = {
+    "python",
+    "python3",
+    "python.exe",
+    "pip",
+    "pip3",
+    "uv",
+    "npm",
+    "node",
+    "npx",
+    "pytest",
+    "py",
+    "git",
+    "ls",
+    "pwd",
+    "grep",
+    "rg",
+    "find",
+    "cat",
+}
 
 
 def resolve_workspace_path(path: str) -> Path:
@@ -95,6 +117,64 @@ def read_file(path: str) -> dict:
         "content": content,
     }
 
+
+@mcp.tool()
+def read_block(path: str, start_line: int, end_line: int) -> dict:
+    """Read a narrow line range to minimize prompt tokens."""
+    try:
+        target = resolve_workspace_path(path)
+        if not target.is_file():
+            return {"success": False, "error": f"Not a file: {path}"}
+        if start_line < 1 or end_line < start_line:
+            return {"success": False, "error": "Invalid line range."}
+
+        lines = target.read_text(encoding="utf-8").splitlines()
+        start_index = max(0, start_line - 1)
+        end_index = min(len(lines), end_line)
+        selected = lines[start_index:end_index]
+
+        return {
+            "success": True,
+            "path": path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "lines": selected,
+        }
+    except (OSError, UnicodeError, ValueError) as error:
+        return {"success": False, "error": str(error)}
+
+
+@mcp.tool()
+def write_selected(path: str, start_line: int, end_line: int, content: str) -> dict:
+    """Replace a selected line range with text without rewriting the whole file."""
+    try:
+        target = resolve_workspace_path(path)
+        if target.is_dir():
+            return {"success": False, "error": f"Path is a directory: {path}"}
+        if start_line < 1 or end_line < start_line:
+            return {"success": False, "error": "Invalid line range."}
+
+        if not target.exists():
+            return {"success": False, "error": f"File does not exist: {path}"}
+
+        existing = target.read_text(encoding="utf-8").splitlines(keepends=True)
+        start_index = max(0, start_line - 1)
+        end_index = min(len(existing), end_line)
+        replacement = content.splitlines(keepends=True)
+        updated = existing[:start_index] + replacement + existing[end_index:]
+        target.write_text("".join(updated), encoding="utf-8")
+
+        return {
+            "success": True,
+            "path": path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "updated": True,
+        }
+    except (OSError, UnicodeError, ValueError) as error:
+        return {"success": False, "error": str(error)}
+
+
 @mcp.tool()
 def write_file(path: str, content: str) -> str:
     """Write text content to a file inside the child agent's workspace."""
@@ -107,6 +187,71 @@ def write_file(path: str, content: str) -> str:
         return f"Successfully wrote file: {path}"
     except (OSError, ValueError) as error:
         return f"Error writing file: {error}"
+
+
+@mcp.tool()
+def read_memory(key: str = "default") -> dict:
+    """Read a concise agent summary stored in the workspace cache."""
+    cache_dir = WORKSPACE_ROOT / ".entropy-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    memory_path = cache_dir / f"{key}.txt"
+
+    if not memory_path.exists():
+        return {"success": True, "exists": False, "content": ""}
+
+    return {"success": True, "exists": True, "content": memory_path.read_text(encoding="utf-8")}
+
+
+@mcp.tool()
+def write_memory(key: str = "default", content: str = "") -> dict:
+    """Write a concise, token-efficient project summary to the workspace cache."""
+    cache_dir = WORKSPACE_ROOT / ".entropy-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    memory_path = cache_dir / f"{key}.txt"
+    memory_path.write_text(content, encoding="utf-8")
+    return {"success": True, "path": str(memory_path), "key": key}
+
+
+@mcp.tool()
+def run_command(command: str, cwd: str = ".") -> dict:
+    """Run a restricted workspace command and return concise output."""
+    try:
+        command_parts = shlex.split(command)
+    except ValueError as error:
+        return {"success": False, "error": str(error), "returncode": -1}
+
+    if not command_parts:
+        return {"success": False, "error": "Command cannot be empty.", "returncode": -1}
+
+    binary = Path(command_parts[0]).name
+    if binary.lower() not in {item.lower() for item in SAFE_COMMANDS}:
+        return {"success": False, "error": f"Command is not allowed in this workspace: {binary}", "returncode": -1}
+
+    try:
+        target_dir = resolve_workspace_path(cwd)
+    except ValueError as error:
+        return {"success": False, "error": str(error), "returncode": -1}
+
+    try:
+        result = subprocess.run(
+            command_parts,
+            cwd=str(target_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        stdout = (result.stdout or "")[:4000]
+        stderr = (result.stderr or "")[:2000]
+        return {
+            "success": result.returncode == 0,
+            "returncode": result.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"success": False, "error": str(error), "returncode": -1}
+
 
 if __name__ == "__main__":
     mcp.run()
