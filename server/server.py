@@ -396,18 +396,42 @@ def stop_process(process):
             pass
 
 
+def _command_is_server_start(command: str) -> bool:
+    """Reject shell loops that would start a preview or app server instead of testing code."""
+    lowered = command.lower()
+    patterns = (
+        "npm run dev",
+        "npm run start",
+        "npm start",
+        "node server",
+        "node app",
+        "python app.py",
+        "python -m http.server",
+        "python -m uvicorn",
+        "uvicorn",
+        "gunicorn",
+        "flask run",
+        "vite",
+        "next dev",
+        "next start",
+        "npx vite",
+        "live-server",
+        "serve",
+    )
+    return any(pattern in lowered for pattern in patterns)
+
+
 @mcp.tool()
 def start_project(
     command: str = "auto",
     args: list[str] | None = None,
     port: int = 0,
 ) -> dict[str, str | int | bool]:
-    """Start a web project from the workspace.
+    """Start a web project only for previewing.
 
-    Use command='auto' to detect common project types.
-    Otherwise provide an installed executable and its arguments.
-    Put {port} in an argument wherever the selected port is needed.
-    The project must start a web server for preview readiness to succeed.
+    Use this tool only when the goal is to launch a local preview server for the generated app.
+    Do not use it for file search, code reading, or general testing commands.
+    Use run_command only for read-only inspections or test execution; never to start a server.
     """
     args = args or []
 
@@ -753,7 +777,13 @@ def write_memory(key: str = "default", content: str = "") -> dict:
 
 @mcp.tool()
 def run_command(command: str, cwd: str = ".") -> dict[str, str | int]:
-    """Run a restricted workspace command and return concise output."""
+    """Run read-only or test commands in the workspace.
+
+    This tool is for quick inspection and validation only, such as grep, rg, ls, pwd, cat,
+    or test execution. It must not be used to launch preview servers, background apps, or dev
+    processes. Use start_project only for preview startup; use run_command only for searching,
+    checking, and testing code paths.
+    """
     allowed = {
         "python",
         "python3",
@@ -761,9 +791,6 @@ def run_command(command: str, cwd: str = ".") -> dict[str, str | int]:
         "pip",
         "pip3",
         "uv",
-        "npm",
-        "node",
-        "npx",
         "pytest",
         "py",
         "git",
@@ -783,9 +810,15 @@ def run_command(command: str, cwd: str = ".") -> dict[str, str | int]:
     if not command_parts:
         return {"success": False, "error": "Command cannot be empty.", "returncode": -1}
 
+    if any(part.lower() in {"bash", "sh", "powershell", "pwsh", "cmd"} for part in command_parts):
+        return {"success": False, "error": "Shell wrappers are not allowed; use direct commands only.", "returncode": -1}
+
     binary = Path(command_parts[0]).name
     if binary.lower() not in {item.lower() for item in allowed}:
         return {"success": False, "error": f"Command is not allowed: {binary}", "returncode": -1}
+
+    if _command_is_server_start(command):
+        return {"success": False, "error": "This tool cannot launch a web app or preview server. Use start_project for preview startup.", "returncode": -1}
 
     try:
         target_dir = resolve_path(cwd)

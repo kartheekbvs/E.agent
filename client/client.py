@@ -88,6 +88,12 @@ AGENT BEHAVIOR
   .entropy-cache summary. Update it instead of repeating the same context.
 - Do not rely on max_turns or long chained conversations; use tool-driven
   progress with short, specific reads and surgical writes.
+- Use start_project only for previewing or running a generated site.
+  Never use run_command or other shell tools to start a server or app.
+  For search, listing, and verification, use run_command only for read-only
+  commands such as ls, pwd, grep, rg, cat, or targeted test execution.
+- Never run server startup commands like npm run dev, npm start, uvicorn,
+  python -m http.server, flask run, or similar inside run_command.
 - Use actual tool results to decide what to do next.
 - Adapt your strategy when an approach fails.
 - Verify important outcomes using available evidence.

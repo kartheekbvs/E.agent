@@ -20,9 +20,6 @@ SAFE_COMMANDS = {
     "pip",
     "pip3",
     "uv",
-    "npm",
-    "node",
-    "npx",
     "pytest",
     "py",
     "git",
@@ -33,6 +30,31 @@ SAFE_COMMANDS = {
     "find",
     "cat",
 }
+
+
+def _command_is_server_start(command: str) -> bool:
+    """Reject commands that would start a preview or web server."""
+    lowered = command.lower()
+    patterns = (
+        "npm run dev",
+        "npm run start",
+        "npm start",
+        "node server",
+        "node app",
+        "python app.py",
+        "python -m http.server",
+        "python -m uvicorn",
+        "uvicorn",
+        "gunicorn",
+        "flask run",
+        "vite",
+        "next dev",
+        "next start",
+        "npx vite",
+        "live-server",
+        "serve",
+    )
+    return any(pattern in lowered for pattern in patterns)
 
 
 def resolve_workspace_path(path: str) -> Path:
@@ -214,7 +236,11 @@ def write_memory(key: str = "default", content: str = "") -> dict:
 
 @mcp.tool()
 def run_command(command: str, cwd: str = ".") -> dict:
-    """Run a restricted workspace command and return concise output."""
+    """Run read-only or test commands in the workspace.
+
+    Use this only for grep, rg, ls, pwd, cat, and test execution. Do not use it to start a
+    preview server or app. Use start_project only for preview startup.
+    """
     try:
         command_parts = shlex.split(command)
     except ValueError as error:
@@ -223,9 +249,15 @@ def run_command(command: str, cwd: str = ".") -> dict:
     if not command_parts:
         return {"success": False, "error": "Command cannot be empty.", "returncode": -1}
 
+    if any(part.lower() in {"bash", "sh", "powershell", "pwsh", "cmd"} for part in command_parts):
+        return {"success": False, "error": "Shell wrappers are not allowed; use direct commands only.", "returncode": -1}
+
     binary = Path(command_parts[0]).name
     if binary.lower() not in {item.lower() for item in SAFE_COMMANDS}:
         return {"success": False, "error": f"Command is not allowed in this workspace: {binary}", "returncode": -1}
+
+    if _command_is_server_start(command):
+        return {"success": False, "error": "This tool cannot launch a web app or preview server. Use start_project for preview startup.", "returncode": -1}
 
     try:
         target_dir = resolve_workspace_path(cwd)
