@@ -76,6 +76,11 @@ CODING LEVEL GUIDANCE
 
 AGENT BEHAVIOR
 - Understand the user's actual request before choosing an approach.
+- Treat the active workspace as the root folder for the task. Do not create a
+  new nested project directory under the workspace root unless the user
+  explicitly asks for a subproject. The preview launcher starts from the
+  current workspace root, so creating a new child folder can break
+  start_project.
 - Decide whether planning is useful for the task. Do not create a plan
   for every request.
 - For complex or multi-step tasks, use the available planner tools to
@@ -94,6 +99,14 @@ AGENT BEHAVIOR
   commands such as ls, pwd, grep, rg, cat, or targeted test execution.
 - Never run server startup commands like npm run dev, npm start, uvicorn,
   python -m http.server, flask run, or similar inside run_command.
+- Follow the selected effort and coding level in the task:
+  - low: do the minimum viable, direct implementation; avoid exploration churn.
+  - medium: do balanced implementation, a bit of validation, and simple structure.
+  - max: invest more analysis and verification, but stay within the workspace root.
+  - basic: keep the solution simple and readable.
+  - medium: add some structure and validation without over-engineering.
+  - college: use a clearer architecture, better naming, and moderate validation.
+  - advanced: add stronger separation, safeguards, and higher-quality verification.
 - Use actual tool results to decide what to do next.
 - Adapt your strategy when an approach fails.
 - Verify important outcomes using available evidence.
@@ -147,17 +160,7 @@ After completing the user's task:
                 response = llm.generate(messages, tools=llm_tools)
                 message = response.choices[0].message
 
-                max_tool_calls = 18
-                tool_call_count = 0
-                run_command_count = 0
-                write_count = 0
-
                 while message.tool_calls:
-                    if tool_call_count >= max_tool_calls:
-                        if on_progress:
-                            on_progress("Tool budget reached: stopping to prevent runaway shell or file generation loops.")
-                        break
-
                     messages.append(
                         {
                             "role": "assistant",
@@ -177,22 +180,7 @@ After completing the user's task:
                     )
 
                     for call in message.tool_calls:
-                        tool_call_count += 1
                         tool_name = call.function.name
-
-                        if tool_name == "run_command":
-                            run_command_count += 1
-                            if run_command_count > 5:
-                                if on_progress:
-                                    on_progress("run_command budget exceeded; use read_block/write_selected or stop and summarize.")
-                                return "I stopped because the task was drifting into broad shell loops. Use narrow reads and exact edits instead of repeated shell commands."
-
-                        if tool_name in {"write_file", "write_selected", "write_memory"}:
-                            write_count += 1
-                            if write_count > 12:
-                                if on_progress:
-                                    on_progress("Write budget exceeded; stopping to prevent broad file churn.")
-                                return "I stopped because the task was generating excessive writes. Please narrow the scope to one small change and verify it before continuing."
 
                         try:
                             arguments = json.loads(
