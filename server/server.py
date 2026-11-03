@@ -1,4 +1,8 @@
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError:
+    from mcp.server.mcpserver import MCPServer as FastMCP
+
 from pathlib import Path
 from itertools import islice
 import shlex
@@ -204,34 +208,42 @@ def wait_for_server(
 
 
 def get_public_preview_base_url() -> str:
-    # Local development always uses the loopback preview URL. Public host
-    # variables are only relevant when the app is actually running in a
-    # deployment environment such as Render or a public proxy.
-    if not (
+    """Return the public base URL for preview links.
+
+    In local development we keep loopback URLs. In deployed or proxied setups we
+    prefer explicit public host env vars, including custom domains such as
+    https://entropy.twss.shop, and otherwise fall back to localhost only for local
+    debugging.
+    """
+    for env_name in (
+        "PUBLIC_BASE_URL",
+        "APP_PUBLIC_URL",
+        "PUBLIC_URL",
+        "APP_URL",
+        "BASE_URL",
+        "ENTROPY_PUBLIC_BASE_URL",
+        "RENDER_EXTERNAL_URL",
+        "RENDER_URL",
+        "HOST",
+        "APP_HOST",
+        "DOMAIN",
+        "ENTROPY_HOST",
+    ):
+        value = os.getenv(env_name)
+        if value:
+            value = value.strip().rstrip("/")
+            if not value.startswith(("http://", "https://")):
+                if value.startswith(("localhost", "127.0.0.1", "0.0.0.0")):
+                    return f"http://{value}"
+                return f"https://{value}"
+            return value
+
+    if (
         os.getenv("RENDER")
         or os.getenv("DYNO")
         or os.getenv("DEPLOYMENT_MODE") == "production"
     ):
         return "http://127.0.0.1"
-
-    for env_name in (
-        "PUBLIC_BASE_URL",
-        "APP_PUBLIC_URL",
-        "APP_URL",
-        "BASE_URL",
-        "RENDER_EXTERNAL_URL",
-        "RENDER_URL",
-        "HOST",
-        "DOMAIN",
-    ):
-        value = os.getenv(env_name)
-        if value:
-            value = value.strip().rstrip("/")
-            if value.startswith("http://") or value.startswith("https://"):
-                return value
-            if value.startswith("localhost") or value.startswith("127.0.0.1"):
-                return f"http://{value}"
-            return f"https://{value}"
 
     return "http://127.0.0.1"
 
