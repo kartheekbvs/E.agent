@@ -255,6 +255,10 @@ def run_command(command: str, cwd: str = ".") -> dict:
     if any(part.lower() in {"bash", "sh", "powershell", "pwsh", "cmd"} for part in command_parts):
         return {"success": False, "error": "Shell wrappers are not allowed; use direct commands only.", "returncode": -1}
 
+    blocked_tokens = {"&&", "||", ";", "|", ">", "<", "*", "$", "`", "cd"}
+    if any(token.lower() in blocked_tokens for token in command_parts):
+        return {"success": False, "error": "Command chaining, shell redirection, and cd are not allowed in run_command.", "returncode": -1}
+
     binary = Path(command_parts[0]).name
     if binary.lower() not in {item.lower() for item in SAFE_COMMANDS}:
         return {"success": False, "error": f"Command is not allowed in this workspace: {binary}", "returncode": -1}

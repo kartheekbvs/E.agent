@@ -147,7 +147,17 @@ After completing the user's task:
                 response = llm.generate(messages, tools=llm_tools)
                 message = response.choices[0].message
 
+                max_tool_calls = 18
+                tool_call_count = 0
+                run_command_count = 0
+                write_count = 0
+
                 while message.tool_calls:
+                    if tool_call_count >= max_tool_calls:
+                        if on_progress:
+                            on_progress("Tool budget reached: stopping to prevent runaway shell or file generation loops.")
+                        break
+
                     messages.append(
                         {
                             "role": "assistant",
@@ -167,7 +177,22 @@ After completing the user's task:
                     )
 
                     for call in message.tool_calls:
+                        tool_call_count += 1
                         tool_name = call.function.name
+
+                        if tool_name == "run_command":
+                            run_command_count += 1
+                            if run_command_count > 5:
+                                if on_progress:
+                                    on_progress("run_command budget exceeded; use read_block/write_selected or stop and summarize.")
+                                return "I stopped because the task was drifting into broad shell loops. Use narrow reads and exact edits instead of repeated shell commands."
+
+                        if tool_name in {"write_file", "write_selected", "write_memory"}:
+                            write_count += 1
+                            if write_count > 12:
+                                if on_progress:
+                                    on_progress("Write budget exceeded; stopping to prevent broad file churn.")
+                                return "I stopped because the task was generating excessive writes. Please narrow the scope to one small change and verify it before continuing."
 
                         try:
                             arguments = json.loads(
