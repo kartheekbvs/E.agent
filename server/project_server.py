@@ -95,6 +95,7 @@ def main():
         command: str = "auto",
         args: list[str] | None = None,
         port: int = 0,
+        startup_timeout: float = 300.0,
     ) -> dict:
         # Clean up previews that stopped since the last launch.
         cleanup_stopped_previews(entropy_server)
@@ -102,6 +103,7 @@ def main():
             command=command,
             args=args,
             port=port,
+            startup_timeout=startup_timeout,
         )
         if result.get("success"):
             register_started_preview(result)

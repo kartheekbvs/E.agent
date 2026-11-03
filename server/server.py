@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import asyncio
+import time
 
 from typing import Literal
 
@@ -186,12 +187,18 @@ PROJECTS = {}
 def wait_for_server(
     host: str,
     port: int,
-    timeout: float = 20.0,
+    timeout: float = 300.0,
+    poll_interval: float = 0.2,
 ) -> bool:
     import socket
     import time
 
-    """Wait until a server accepts TCP connections."""
+    """Wait until a server accepts TCP connections.
+
+    A preview server may take a little while to compile assets or boot a dev
+    dependency chain, so the default lifecycle is longer than a quick startup
+    check. The caller can still override this for faster local validation.
+    """
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
@@ -202,7 +209,7 @@ def wait_for_server(
             ):
                 return True
         except OSError:
-            time.sleep(0.2)
+            time.sleep(poll_interval)
 
     return False
 
@@ -438,8 +445,13 @@ def start_project(
     command: str = "auto",
     args: list[str] | None = None,
     port: int = 0,
+    startup_timeout: float = 300.0,
 ) -> dict[str, str | int | bool]:
     """Start a web project only for previewing.
+
+    The server is kept alive for a longer startup window so build/dev servers can
+    finish booting before the tool returns. The default window is 300 seconds
+    (5 minutes), enough for generated apps and local previews to initialize.
 
     Use this tool only when the goal is to launch a local preview server for the generated app.
     Do not use it for file search, code reading, or general testing commands.
@@ -558,10 +570,16 @@ def start_project(
             "project_type": project_type,
             "log_path": log_path,
             "log_handle": log_handle,
+            "startup_timeout": float(startup_timeout),
+            "started_at": time.monotonic(),
         }
 
         # Wait until the server actually accepts connections.
-        if not wait_for_server("127.0.0.1", port, timeout=20):
+        if not wait_for_server(
+            "127.0.0.1",
+            port,
+            timeout=max(5.0, float(startup_timeout)),
+        ):
             returncode = process.poll()
 
             stop_process(process)
@@ -602,6 +620,7 @@ def start_project(
             "project_type": project_type,
             "port": port,
             "preview_url": preview_url,
+            "startup_timeout": float(startup_timeout),
             "message": "Project server is accepting connections.",
         }
 
@@ -644,6 +663,7 @@ def get_project_status(project_id: str) -> dict[str, str | int | bool]:
             "pid": process.pid,
             "port": project["port"],
             "preview_url": preview_url,
+            "startup_timeout": float(project.get("startup_timeout", 300.0)),
         }
 
     log_path = project.get("log_path", "")
